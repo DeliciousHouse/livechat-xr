@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -21,7 +21,7 @@ jobs:
         shell: cmd
         run: layer\build.cmd
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -51,7 +51,7 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$v installer\livechat-xr.iss
           if ($LASTEXITCODE) { throw "ISCC failed" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: LiveChatXR-Setup
           path: dist/LiveChatXR-Setup-*.exe
@@ -62,3 +62,4 @@ jobs:
         with:
           files: dist/LiveChatXR-Setup-*.exe
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
