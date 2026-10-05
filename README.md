@@ -3,6 +3,10 @@
 See your **Twitch** or **TikTok LIVE** chat while you play PC VR. New comments appear as a short banner near the top of
 your view, pinned to your head so it stays visible however you turn, then fade after a few seconds.
 
+**Gifts and support show too, in gold:** TikTok gifts (a gift combo is shown once, with its final count), Twitch Bits
+cheers, subs, resubs and gifted subs (a mass gift is shown once, not once per sub). Gifts are always listed first in a
+banner, so they never get folded into "+N more".
+
 Comments that arrive close together share one banner ("+N more" when there are lots), so a busy chat can't bury your view.
 Your own messages are skipped.
 

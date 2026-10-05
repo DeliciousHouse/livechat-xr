@@ -37,8 +37,12 @@ def save_config(cp: configparser.ConfigParser) -> None:
     os.replace(tmp, DIR / "config.ini")
 
 
+GIFT = "🎁 "  # the layer draws lines starting with this in gold
+
+
 def batch(lines: list[str], max_lines: int = 3) -> str:
-    """Merge queued comments into one banner; keep it short enough to read mid-game."""
+    """Merge queued lines into one banner; gifts go first so they never end up in "+N more"."""
+    lines = sorted(lines, key=lambda line: not line.startswith(GIFT))  # stable: keeps arrival order
     shown = lines[:max_lines]
     extra = len(lines) - len(shown)
     return "\n".join(shown) + (f"\n+{extra} more" if extra else "")
@@ -52,20 +56,34 @@ def write_banner(text: str) -> None:
 
 
 # ---------------------------------------------------------------- Twitch (anonymous IRC, no key needed)
-_PRIVMSG = re.compile(r"^(?:@(?P<tags>\S+) )?:(?P<login>[^!\s]+)!\S+ PRIVMSG #\S+ :(?P<msg>.*)$")
+_LINE = re.compile(r"^(?:@(?P<tags>\S+) )?:(?P<login>[^!\s]+)\S* (?P<cmd>PRIVMSG|USERNOTICE) #\S+(?: :(?P<msg>.*))?$")
+_UNESCAPE = {"s": " ", ":": ";", "\\": "\\", "r": "", "n": ""}
+_SUPPORT = {"sub", "resub", "subgift", "submysterygift", "giftpaidupgrade", "anongiftpaidupgrade", "primepaidupgrade"}
 
 
-def parse_twitch(line: str) -> tuple[str, str, str] | None:
-    """IRC line -> (login, display name, message), or None for anything that isn't chat."""
-    m = _PRIVMSG.match(line)
+def _tags(raw: str) -> dict[str, str]:
+    out = {}
+    for kv in raw.split(";") if raw else ():
+        k, _, v = kv.partition("=")
+        out[k] = re.sub(r"\\(.)", lambda m: _UNESCAPE.get(m[1], m[1]), v)
+    return out
+
+
+def twitch_line(line: str, channel: str) -> str | None:
+    """IRC line -> banner line: chat, cheers (bits) and subs/gift subs. None for everything else."""
+    m = _LINE.match(line)
     if not m:
         return None
-    name = m["login"]
-    for kv in (m["tags"] or "").split(";"):
-        if kv.startswith("display-name=") and len(kv) > 13:
-            name = kv[13:].replace("\\s", " ")
-    return m["login"], name, m["msg"]
-
+    tags, msg = _tags(m["tags"] or ""), m["msg"] or ""
+    name = tags.get("display-name") or m["login"]
+    if m["cmd"] == "PRIVMSG":
+        if tags.get("bits"):
+            return f"{GIFT}{name} cheered {tags['bits']} bits" + (f": {msg}" if msg else "")
+        return None if m["login"] == channel else f"{name}: {msg}"
+    kind = tags.get("msg-id", "")
+    if kind not in _SUPPORT or (kind == "subgift" and "msg-param-community-gift-id" in tags):
+        return None  # individual subs of a mass gift: the submysterygift line already covers them
+    return GIFT + (tags.get("system-msg") or f"{name}: {kind}") + (f" — {msg}" if msg else "")
 
 async def twitch(channel: str, emit, status) -> None:
     channel = channel.lower().lstrip("#")
@@ -83,10 +101,8 @@ async def twitch(channel: str, emit, status) -> None:
                 if line.startswith("PING"):
                     w.write(f"PONG{line[4:]}\r\n".encode())
                     await w.drain()
-                elif p := parse_twitch(line):
-                    login, name, msg = p
-                    if login != channel:  # skip the streamer's own messages
-                        emit(f"{name}: {msg}")
+                elif out := twitch_line(line, channel):
+                    emit(out)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -96,9 +112,15 @@ async def twitch(channel: str, emit, status) -> None:
 
 
 # ---------------------------------------------------------------- TikTok (unofficial; TikTokLive library)
+def _who(u) -> tuple[str, str]:
+    """TikTok user -> (@handle, display name)."""
+    handle = (getattr(u, "unique_id", None) or getattr(u, "display_id", "") or "") if u else ""
+    return handle, (getattr(u, "nickname", "") if u else "") or handle or "?"
+
+
 async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
     from TikTokLive import TikTokLiveClient
-    from TikTokLive.events import CommentEvent, ConnectEvent
+    from TikTokLive.events import CommentEvent, ConnectEvent, GiftEvent
 
     user = user.lstrip("@")
     if sign_api_key:
@@ -112,11 +134,16 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
 
         @client.on(CommentEvent)
         async def _(e: CommentEvent):
-            u = e.user
-            handle = (getattr(u, "unique_id", None) or getattr(u, "display_id", "") or "") if u else ""
-            if handle.lower() == user.lower():
+            handle, name = _who(e.user)
+            if handle.lower() != user.lower():  # skip the streamer's own messages
+                emit(f"{name}: {e.comment}")
+
+        @client.on(GiftEvent)
+        async def _(e: GiftEvent):
+            if e.streaking or not e.gift:  # a combo sends many events; show only the final total
                 return
-            emit(f"{(u.nickname if u else '') or handle or '?'}: {e.comment}")
+            n = e.repeat_count or 1
+            emit(f"{GIFT}{_who(e.user)[1]} sent {e.gift.name}" + (f" x{n}" if n > 1 else ""))
 
         try:
             await client.connect(process_connect_events=False)  # returns when the stream ends

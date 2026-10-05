@@ -44,12 +44,15 @@ class Layer(unittest.TestCase):
 
     def test_raster(self):
         buf = (C.c_uint32 * (W * H))()
-        self.dll.livechatxr_render_test("Viewer One: nice shot!\nSecondPerson: what gun is that 🔫\n+2 more".encode(), buf)
+        self.dll.livechatxr_render_test("🎁 BigFan sent Galaxy x3\nViewer One: nice shot!\nSecondPerson: what gun is that 🔫".encode(), buf)
         alpha = [p >> 24 for p in buf]
         self.assertGreater(alpha[0], 150, "top-left is inside the dark box")
         self.assertEqual(alpha[(H - 1) * W], 0, "rows below the text are transparent")
-        self.assertGreater(max(p & 0xFF for p in buf), 240, "text pixels are white")
-        rows = b"".join(b"\0" + b"".join(bytes([int((p & 0xFF) * (p >> 24) / 255 + 128 * (1 - (p >> 24) / 255))] * 3)
+        rgb = lambda p: (p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF)
+        top, rest = buf[:W * 80], buf[W * 90:]
+        self.assertTrue(any(r > 200 and r - b > 120 for r, g, b in map(rgb, top)), "gift line (first row) is gold")
+        self.assertTrue(any(min(rgb(p)) > 240 for p in rest), "comment lines are white")
+        rows = b"".join(b"\0" + b"".join(bytes(int(ch * (p >> 24) / 255 + 128 * (1 - (p >> 24) / 255)) for ch in (p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF))
                                          for p in buf[y * W:(y + 1) * W]) for y in range(H))
         chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
         (ROOT / "tests" / "preview.png").write_bytes(

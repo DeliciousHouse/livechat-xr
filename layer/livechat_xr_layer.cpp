@@ -66,9 +66,13 @@ NEXT_FNS(DECL)
 
 // ---------------------------------------------------------------- banner text -> pixels (worker thread)
 static std::mutex g_mx;
-static std::vector<uint32_t> g_pixels(W * H);  // grey + alpha, so RGBA and BGRA byte orders agree
-static bool g_dirty = false;
+static std::vector<uint32_t> g_pixels(W * H);  // RGBA (R in the low byte); swizzled at upload for BGRA swapchains
+static bool g_dirty = false, g_bgra = false;
 static ULONGLONG g_until = 0;                  // GetTickCount64 deadline
+
+// Lines starting with the gift emoji (U+1F381) are drawn gold; everything else white.
+static const wchar_t GIFT[] = L"\xD83C\xDF81";
+static const COLORREF WHITE = RGB(255, 255, 255), GOLD = RGB(255, 196, 64);
 
 static void Rasterize(const std::wstring& text, std::vector<uint32_t>& out) {
     BITMAPINFO bi{};
@@ -81,31 +85,47 @@ static void Rasterize(const std::wstring& text, std::vector<uint32_t>& out) {
     HGDIOBJ oldFont = SelectObject(dc, font);
     memset(bits, 0, W * H * 4);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(255, 255, 255));
-    RECT r{28, 18, W - 28, H - 18};
-    RECT calc = r;
-    UINT flags = DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_END_ELLIPSIS;
-    DrawTextW(dc, text.c_str(), -1, &calc, flags | DT_CALCRECT);
-    DrawTextW(dc, text.c_str(), -1, &r, flags);
+    SetTextColor(dc, WHITE);  // coverage only; colour is applied per row below
+    std::vector<COLORREF> rowColor(H, WHITE);
+    const int pad = 18, bottom = H - pad;
+    const UINT flags = DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL | DT_END_ELLIPSIS;
+    int y = pad;
+    for (size_t start = 0; start <= text.size() && y < bottom;) {
+        size_t end = text.find(L'\n', start);
+        if (end == std::wstring::npos) end = text.size();
+        std::wstring line = text.substr(start, end - start);
+        start = end + 1;
+        if (line.empty()) continue;
+        RECT r{28, y, W - 28, bottom};
+        RECT calc = r;
+        DrawTextW(dc, line.c_str(), -1, &calc, flags | DT_CALCRECT);
+        DrawTextW(dc, line.c_str(), -1, &r, flags);
+        COLORREF c = line.compare(0, 2, GIFT) == 0 ? GOLD : WHITE;
+        for (int row = y; row < calc.bottom && row < H; ++row) rowColor[row] = c;
+        y = calc.bottom;
+    }
     GdiFlush();
-    int boxBottom = (calc.bottom < H - 18 ? calc.bottom : H - 18) + 18;  // dark box hugs the text
+    int boxBottom = (y < bottom ? y : bottom) + pad;  // dark box hugs the text
     const uint8_t* src = (const uint8_t*)bits;
-    for (int y = 0; y < H; ++y)
+    for (int row = 0; row < H; ++row) {
+        COLORREF col = rowColor[row];
         for (int x = 0; x < W; ++x) {
-            const uint8_t* p = src + (y * W + x) * 4;
+            const uint8_t* p = src + (row * W + x) * 4;
             float c = (p[0] > p[1] ? (p[0] > p[2] ? p[0] : p[2]) : (p[1] > p[2] ? p[1] : p[2])) / 255.f;
-            float bg = y < boxBottom ? 0.78f : 0.f;
-            float a = c + bg * (1 - c);                 // text over dark box, straight alpha
-            uint8_t v = a > 0 ? (uint8_t)(255 * c / a + .5f) : 0, A = (uint8_t)(255 * a + .5f);
-            out[y * W + x] = (uint32_t)v | v << 8 | v << 16 | (uint32_t)A << 24;  // grey: RGBA == BGRA
+            float bg = row < boxBottom ? 0.78f : 0.f;
+            float a = c + bg * (1 - c);  // text over dark box, straight alpha
+            float k = a > 0 ? c / a : 0;
+            uint32_t R = (uint32_t)(GetRValue(col) * k + .5f), G = (uint32_t)(GetGValue(col) * k + .5f),
+                     B = (uint32_t)(GetBValue(col) * k + .5f), A = (uint32_t)(255 * a + .5f);
+            out[row * W + x] = R | G << 8 | B << 16 | A << 24;
         }
+    }
     SelectObject(dc, oldFont);
     DeleteObject(font);
     SelectObject(dc, oldBmp);
     DeleteObject(bmp);
     DeleteDC(dc);
 }
-
 static void Watcher() {
     std::wstring path = g_dir + L"\\banner.txt";
     FILETIME last{};
@@ -177,6 +197,7 @@ static bool Setup(XrSession session, XrSystemId sys, ID3D11Device* dev) {
         if (fmt) break;
     }
     if (!fmt) return false;
+    g_bgra = fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || fmt == DXGI_FORMAT_B8G8R8A8_UNORM;
 
     XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
     ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
@@ -205,7 +226,17 @@ static bool Upload() {  // render thread only
     S.dev->GetImmediateContext(&ctx);
     {
         std::lock_guard<std::mutex> l(g_mx);
-        ctx->UpdateSubresource(S.imgs[idx].texture, 0, nullptr, g_pixels.data(), W * 4, 0);
+        const uint32_t* px = g_pixels.data();
+        std::vector<uint32_t> swz;
+        if (g_bgra) {  // swap R and B
+            swz.resize(g_pixels.size());
+            for (size_t i = 0; i < swz.size(); ++i) {
+                uint32_t p = g_pixels[i];
+                swz[i] = (p & 0xFF00FF00) | (p & 0xFF) << 16 | (p >> 16 & 0xFF);
+            }
+            px = swz.data();
+        }
+        ctx->UpdateSubresource(S.imgs[idx].texture, 0, nullptr, px, W * 4, 0);
         g_dirty = false;
     }
     ctx->Release();
