@@ -1,0 +1,64 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build OpenXR layer
+        shell: cmd
+        run: layer\build.cmd
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt pyinstaller==6.*
+
+      - name: Tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Package app
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name LiveChatXR
+          --collect-all TikTokLive --collect-all TikTokLiveProto --collect-submodules EulerApiSdk
+          --paths app app/livechat_xr.py
+
+      - name: Smoke-test packaged app
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\LiveChatXR\LiveChatXR.exe -ArgumentList '--check' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "packaged app failed --check ($($p.ExitCode))" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0-dev.${{ github.run_number }}" }
+          choco install innosetup --no-progress -y | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$v installer\livechat-xr.iss
+          if ($LASTEXITCODE) { throw "ISCC failed" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LiveChatXR-Setup
+          path: dist/LiveChatXR-Setup-*.exe
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/LiveChatXR-Setup-*.exe
+          generate_release_notes: true

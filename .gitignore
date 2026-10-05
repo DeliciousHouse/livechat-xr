@@ -1,0 +1,10 @@
+.venv/
+build/
+dist/
+*.spec
+__pycache__/
+layer/*.dll
+layer/*.lib
+layer/*.exp
+layer/*.obj
+tests/preview.png

@@ -1,0 +1,11 @@
+{
+  "file_format_version": "1.0.0",
+  "api_layer": {
+    "name": "XR_APILAYER_LIVECHATXR_banner",
+    "library_path": ".\\livechat_xr_layer.dll",
+    "api_version": "1.0",
+    "implementation_version": "1",
+    "description": "LiveChat XR: head-locked stream chat banner",
+    "disable_environment": "LIVECHATXR_DISABLE"
+  }
+}
