@@ -178,6 +178,30 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
         await asyncio.sleep(60)
 
 
+# ---------------------------------------------------------------- relay: chat source -> one batch per window
+async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
+                sign_api_key: str = "") -> None:
+    """Run the chat source and call on_batch(text) once per window that had comments. Used by the PC app
+    (banner + optional Discord) and by the hosted server (Discord only)."""
+    queue: list[str] = []
+    channel = channel.strip()
+    if platform.lower() == "tiktok":
+        source = tiktok(channel, queue.append, status, sign_api_key)
+    else:
+        source = twitch(channel, queue.append, status)
+    src = asyncio.ensure_future(source)
+    try:
+        while not src.done():
+            await asyncio.sleep(seconds)
+            if queue:
+                lines = queue[:]
+                queue.clear()
+                on_batch(batch(lines, max_lines))
+        src.result()
+    finally:
+        src.cancel()
+
+
 # ---------------------------------------------------------------- runner (background thread + event loop)
 class Runner:
     def __init__(self):
@@ -192,29 +216,16 @@ class Runner:
         self.status = s
 
     async def _main(self, cfg: configparser.ConfigParser) -> None:
-        queue: list[str] = []
-        seconds = cfg.getfloat("banner", "seconds", fallback=7)
-        max_lines = cfg.getint("banner", "max_lines", fallback=3)
-        platform, channel = cfg["chat"]["platform"].lower(), cfg["chat"]["channel"].strip()
-        if platform == "tiktok":
-            source = tiktok(channel, queue.append, self._set_status, cfg["chat"].get("tiktok_sign_api_key", ""))
-        else:
-            source = twitch(channel, queue.append, self._set_status)
         webhook = cfg["chat"].get("discord_webhook", "").strip()
-        src = asyncio.ensure_future(source)
-        try:
-            while not src.done():
-                await asyncio.sleep(seconds)
-                if queue:
-                    lines = queue[:]
-                    queue.clear()
-                    text = batch(lines, max_lines)
-                    write_banner(text)
-                    if webhook:
-                        threading.Thread(target=post_discord, args=(webhook, text), daemon=True).start()
-            src.result()
-        finally:
-            src.cancel()
+
+        def on_batch(text: str) -> None:
+            write_banner(text)
+            if webhook:
+                threading.Thread(target=post_discord, args=(webhook, text), daemon=True).start()
+
+        await relay(cfg["chat"]["platform"], cfg["chat"]["channel"], on_batch, self._set_status,
+                    cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
+                    cfg["chat"].get("tiktok_sign_api_key", ""))
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
