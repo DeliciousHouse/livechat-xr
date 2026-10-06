@@ -10,6 +10,16 @@ banner, so they never get folded into "+N more".
 Comments that arrive close together share one banner ("+N more" when there are lots), so a busy chat can't bury your view.
 Your own messages are skipped.
 
+## Standalone Quest? Use Discord instead (no PC)
+
+Go to **https://livechat.deliciouswines.org**, enter your TikTok or Twitch channel and a Discord webhook URL, and your
+chat gets posted to that Discord channel whenever you're live. With the Discord app on your Quest, comments pop up as
+notifications in-game. The page walks you through making the webhook. You get a private link to send a test or stop it,
+and that link is also posted in your Discord channel.
+
+Self-hosting the relay: `docker build -f server/Dockerfile -t livechat-xr-relay .` then
+`docker run -d -p 13300:13300 -v livechat-xr-data:/data -e PUBLIC_URL=https://your.host livechat-xr-relay`.
+
 ## How it works
 
 LiveChat XR has two parts:
