@@ -118,6 +118,28 @@ class TikTok(unittest.TestCase):
         self.assertEqual(out, ["Viewer: hi", "🎁 Fan sent Rose x5", "🎁 One sent Rose"])
 
 
+class Discord(unittest.TestCase):
+    def test_post_disables_mentions_and_truncates(self):
+        sent = {}
+
+        def fake_urlopen(req, timeout):
+            sent["url"], sent["body"], sent["ua"] = req.full_url, req.data, req.get_header("User-agent")
+            return mock.Mock(close=lambda: None)
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen):
+            chat.post_discord("https://discord.com/api/webhooks/1/abc", "@everyone 🎁 Fan sent Rose x5" + "x" * 3000)
+        import json
+        body = json.loads(sent["body"])
+        self.assertEqual(body["allowed_mentions"], {"parse": []})
+        self.assertEqual(len(body["content"]), 2000)
+        self.assertTrue(body["content"].startswith("@everyone 🎁"))
+        self.assertIn("LiveChatXR", sent["ua"])
+
+    def test_post_failure_is_swallowed(self):
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("429")):
+            chat.post_discord("https://discord.com/api/webhooks/1/abc", "hi")  # must not raise
+
+
 class Files(unittest.TestCase):
     def test_banner_and_config_roundtrip(self):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):

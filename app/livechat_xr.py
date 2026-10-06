@@ -25,6 +25,7 @@ FIELDS = [  # (section, key, label)
     ("banner", "distance", "Distance (m)"),
     ("banner", "width", "Width (m)"),
     ("chat", "tiktok_sign_api_key", "TikTok sign API key (optional)"),
+    ("chat", "discord_webhook", "Discord webhook URL (optional)"),
 ]
 
 
@@ -117,7 +118,7 @@ class App:
         for i, (sec, key, label) in enumerate(FIELDS, start=1):
             ttk.Label(f, text=label).grid(row=i, column=0, sticky="w", pady=3)
             v = tk.StringVar(value=self.cfg[sec][key])
-            ttk.Entry(f, textvariable=v, width=36, show="•" if "key" in key else "").grid(row=i, column=1, pady=3)
+            ttk.Entry(f, textvariable=v, width=36, show="•" if "key" in key or "webhook" in key else "").grid(row=i, column=1, pady=3)
             self.vars[(sec, key)] = v
         n = len(FIELDS) + 1
         self.auto = tk.BooleanVar(value=autostart_enabled())

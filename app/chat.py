@@ -4,6 +4,7 @@ The OpenXR layer (layer/livechat_xr_layer.cpp) watches banner.txt and shows each
 head-locked banner for [banner] seconds. Comments arriving within one window share one banner.
 """
 import asyncio
+import json
 import configparser
 import logging
 import os
@@ -11,11 +12,12 @@ import random
 import re
 import ssl
 import threading
+import urllib.request
 from pathlib import Path
 
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
-    "chat": {"platform": "twitch", "channel": "", "tiktok_sign_api_key": ""},
+    "chat": {"platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": ""},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -53,6 +55,22 @@ def write_banner(text: str) -> None:
     tmp = DIR / "banner.tmp"
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, DIR / "banner.txt")  # atomic: the layer never reads a half-written file
+
+
+def post_discord(webhook: str, text: str) -> None:
+    """Post one batch to a Discord channel webhook. Discord's own app shows it as a notification
+    (on Quest that includes pop-ups during games), which is the standalone/companion display path."""
+    body = json.dumps({
+        "content": text[:2000],
+        "username": "LiveChat XR",
+        "allowed_mentions": {"parse": []},  # chat text must never ping @everyone/@here/roles
+    }).encode()
+    req = urllib.request.Request(webhook, body, {"Content-Type": "application/json",
+                                                "User-Agent": "LiveChatXR (github.com/DeliciousHouse/livechat-xr)"})
+    try:
+        urllib.request.urlopen(req, timeout=10).close()
+    except Exception as e:  # 429 = Discord rate limit (30/min/channel); drop rather than pile up
+        log.warning("discord post failed: %s", e)
 
 
 # ---------------------------------------------------------------- Twitch (anonymous IRC, no key needed)
@@ -182,6 +200,7 @@ class Runner:
             source = tiktok(channel, queue.append, self._set_status, cfg["chat"].get("tiktok_sign_api_key", ""))
         else:
             source = twitch(channel, queue.append, self._set_status)
+        webhook = cfg["chat"].get("discord_webhook", "").strip()
         src = asyncio.ensure_future(source)
         try:
             while not src.done():
@@ -189,7 +208,10 @@ class Runner:
                 if queue:
                     lines = queue[:]
                     queue.clear()
-                    write_banner(batch(lines, max_lines))
+                    text = batch(lines, max_lines)
+                    write_banner(text)
+                    if webhook:
+                        threading.Thread(target=post_discord, args=(webhook, text), daemon=True).start()
             src.result()
         finally:
             src.cancel()
