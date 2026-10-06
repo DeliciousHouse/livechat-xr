@@ -45,6 +45,22 @@ LiveChat XR has two parts:
 
 Placement (height, distance, width) and the game list are read when the game starts, so restart the game after changing them.
 
+### Optional: Discord (chat on your Quest without the PC overlay)
+
+LiveChat XR can also post each chat batch to a Discord channel. The Discord app on your Quest then pops it up as a
+notification, even mid-game, so it works for standalone Quest games too.
+
+1. In Discord, use a server you own (a private one is fine) and make a channel just for this, e.g. `#stream-chat`.
+2. Channel settings (gear icon) → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**.
+3. Paste it into **Discord webhook URL** in LiveChat XR settings and save.
+4. Install Discord on the Quest, sign in, and set that channel's notifications to **All Messages**. Mute your other
+   servers while streaming if you only want chat pop-ups.
+5. **Send test banner**: the same text should land in the channel and pop up on the Quest.
+
+Treat the webhook URL like a password: anyone who has it can post to that channel. Mentions are always disabled, so chat
+text can never ping @everyone or roles. LiveChat XR posts at most once per banner window (7 s by default), well under
+Discord's limit of about 30 posts a minute per channel.
+
 ## ⚠️ Anti-cheat
 
 The layer runs inside the game process, as every OpenXR overlay does (OpenKneeboard, OpenXR Toolkit, and others). Some

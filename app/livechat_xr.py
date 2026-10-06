@@ -4,6 +4,7 @@ import logging
 import os
 import queue
 import sys
+import threading
 import tkinter as tk
 import winreg
 from logging.handlers import RotatingFileHandler
@@ -96,7 +97,11 @@ class App:
         self.root.after(500, self.pump)
 
     def test_banner(self):
-        chat.write_banner("LiveChat XR: test banner ✔\nIf you can read this in your headset, you're set.")
+        text = "LiveChat XR: test banner ✔\nIf you can read this in your headset, you're set."
+        chat.write_banner(text)
+        webhook = self.cfg["chat"].get("discord_webhook", "").strip()
+        if webhook:
+            threading.Thread(target=chat.post_discord, args=(webhook, text), daemon=True).start()
 
     def open_settings(self):
         if self.win and self.win.winfo_exists():
