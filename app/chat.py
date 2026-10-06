@@ -248,3 +248,24 @@ class Runner:
             self._thread.join(timeout=10)
         self._thread = None
         self._set_status("Stopped")
+
+
+# ---------------------------------------------------------------- headless (no tray, no overlay)
+# For a standalone headset: run this in Termux on the Quest (or on any phone/Mac/Linux box) and chat
+# goes to your Discord channel, which the Quest's Discord app pops up in-game. No PC needed.
+#   python chat.py tiktok <handle> <discord webhook URL>      (or: twitch <channel> <webhook>)
+# With no arguments it uses ~/LiveChatXR/config.ini (or %LOCALAPPDATA% on Windows).
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    cfg = load_config()
+    if len(sys.argv) == 4:
+        cfg["chat"]["platform"], cfg["chat"]["channel"], cfg["chat"]["discord_webhook"] = sys.argv[1:]
+    elif len(sys.argv) != 1:
+        sys.exit("usage: python chat.py [tiktok|twitch <channel> <discord webhook URL>]")
+    if not cfg["chat"]["channel"].strip():
+        sys.exit("no channel set: pass  tiktok|twitch <channel> <webhook>")
+    try:
+        asyncio.run(Runner()._main(cfg))
+    except KeyboardInterrupt:
+        pass
