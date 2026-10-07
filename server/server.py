@@ -18,6 +18,7 @@ import hmac
 import html
 import json
 import logging
+import logging.handlers
 import os
 import re
 import secrets
@@ -52,7 +53,7 @@ regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webh
                                 #           plan: free|paid|pending, subscription}
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
-stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; in memory, resets on restart
+stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; saved to stats.json every 30 s
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
 
@@ -60,16 +61,50 @@ class _Ring(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         logbuf.append((record.created, record.levelname, record.name, record.getMessage()))
 
+
+def write_json(name: str, obj) -> None:
+    DATA.mkdir(parents=True, exist_ok=True)
+    tmp = DATA / (name + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
+    os.replace(tmp, DATA / name)
+
+
+def load_log_tail() -> None:
+    """Refill the admin log from relay.log (tab-separated: epoch, level, logger, message)."""
+    lines: list[str] = []
+    for f in (DATA / "relay.log.1", DATA / "relay.log"):
+        try:
+            lines += f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            pass
+    for line in lines[-logbuf.maxlen:]:
+        parts = line.split("\t", 3)
+        if len(parts) == 4:
+            try:
+                logbuf.append((float(parts[0]), parts[1], parts[2], parts[3]))
+            except ValueError:
+                pass
+
+
+async def save_stats_loop() -> None:
+    last = ""
+    while True:
+        await asyncio.sleep(30)
+        now = json.dumps(stats, sort_keys=True)
+        if now != last:
+            try:
+                write_json("stats.json", stats)
+                last = now
+            except OSError as e:
+                log.warning("saving stats failed: %r", e)
+
 lock = threading.Lock()
 oauth: dict[str, tuple[float, dict]] = {}  # state -> (created, sign-up form) while the user is on Discord
 loop = asyncio.new_event_loop()
 
 
 def save() -> None:
-    DATA.mkdir(parents=True, exist_ok=True)
-    tmp = DATA / "registrations.tmp"
-    tmp.write_text(json.dumps(regs, indent=1), encoding="utf-8")
-    os.replace(tmp, DATA / "registrations.json")
+    write_json("registrations.json", regs)
 
 
 def plan(r: dict) -> str:
@@ -346,6 +381,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.manage(token, note("Test sent. Check your Discord channel (and your Quest)."))
         with lock:
             r = regs.pop(token, None)
+            stats.pop(token, None)
             save()
         stop(token)
         extra = ""
@@ -431,7 +467,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    logging.getLogger().addHandler(_Ring(logging.INFO))
+    DATA.mkdir(parents=True, exist_ok=True)
+    load_log_tail()
+    try:
+        stats.update(json.loads((DATA / "stats.json").read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        pass
+    filelog = logging.handlers.RotatingFileHandler(DATA / "relay.log", maxBytes=1_000_000, backupCount=1, encoding="utf-8")
+    filelog.setFormatter(logging.Formatter("%(created)f\t%(levelname)s\t%(name)s\t%(message)s"))
+    filelog.addFilter(lambda rec: rec.name not in ("httpx", "httpcore"))
+    for h in (filelog, _Ring(logging.INFO)):
+        h.setLevel(logging.INFO)
+        logging.getLogger().addHandler(h)
+    loop.create_task(save_stats_loop())
     logging.getLogger("httpx").setLevel(logging.WARNING)  # TikTokLive logs every request URL
     try:
         regs.update(json.loads((DATA / "registrations.json").read_text(encoding="utf-8")))

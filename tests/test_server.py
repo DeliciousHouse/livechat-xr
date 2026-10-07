@@ -167,6 +167,16 @@ class Server(unittest.TestCase):
         finally:
             server.DISCORD_ID, server.PUBLIC_URL = "", ""
 
+    def test_log_and_stats_survive_restart(self):
+        (server.DATA / "relay.log").write_text("1791370000.5\tWARNING\tlivechatxr\tdiscord post failed: 429\nnot a log line\n",
+                                               encoding="utf-8")
+        server.logbuf.clear()
+        server.load_log_tail()
+        self.assertEqual(list(server.logbuf), [(1791370000.5, "WARNING", "livechatxr", "discord post failed: 429")])
+        server.write_json("stats.json", {"tok": {"posts": 3}})
+        self.assertEqual(json.loads((server.DATA / "stats.json").read_text()), {"tok": {"posts": 3}})
+        server.logbuf.clear()
+
     def test_cap(self):
         server.MAX_REGS = 1
         try:
