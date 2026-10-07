@@ -70,6 +70,16 @@ class Server(unittest.TestCase):
             self.assertNotIn(HOOK, body)
             with self.assertRaises(urllib.error.HTTPError):
                 urllib.request.urlopen(f"{self.base}/admin?key=wrong")
+            # activity + failures + log lines show up
+            token = next(iter(server.regs))
+            server.stats[token] = {"posts": 7, "fails": 2, "last_post": time.time() - 30, "last_error": "10-07 02:00 Discord post failed"}
+            server.logbuf.append((time.time(), "WARNING", "livechatxr", "discord post failed: HTTP Error 429 <x>"))
+            body = urllib.request.urlopen(f"{self.base}/admin?key={'k' * 32}").read().decode()
+            self.assertIn("Discord post failed", body)
+            self.assertIn("HTTP Error 429 &lt;x&gt;", body)
+            self.assertRegex(body, r"3[01]s ago")
+            server.stats.clear()
+            server.logbuf.clear()
         finally:
             server.ADMIN_KEY = ""
 

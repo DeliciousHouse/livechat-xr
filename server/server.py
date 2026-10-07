@@ -12,6 +12,7 @@ their Discord channel so it can't get lost.
     DATA_DIR=./data PORT=13300 python server.py      (needs app/chat.py next to it or on PYTHONPATH)
 """
 import asyncio
+import collections
 import hashlib
 import hmac
 import html
@@ -51,6 +52,14 @@ regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webh
                                 #           plan: free|paid|pending, subscription}
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
+stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; in memory, resets on restart
+logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
+
+
+class _Ring(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        logbuf.append((record.created, record.levelname, record.name, record.getMessage()))
+
 lock = threading.Lock()
 oauth: dict[str, tuple[float, dict]] = {}  # state -> (created, sign-up form) while the user is on Discord
 loop = asyncio.new_event_loop()
@@ -97,10 +106,21 @@ async def run(token: str, delay: float = 0) -> None:
     await asyncio.sleep(delay)  # stagger startup: TikTok's sign server rate-limits connects per IP
     r = regs[token]
 
+    def post(text: str) -> None:
+        ok = chat.post_discord(r["webhook"], text) is not False
+        st = stats.setdefault(token, {"posts": 0, "fails": 0, "last_post": 0, "last_error": ""})
+        st["posts" if ok else "fails"] += 1
+        if ok:
+            st["last_post"] = time.time()
+        else:
+            st["last_error"] = time.strftime("%m-%d %H:%M") + " Discord post failed"
+
     def on_batch(text: str) -> None:
-        threading.Thread(target=chat.post_discord, args=(r["webhook"], text), daemon=True).start()
+        threading.Thread(target=post, args=(text,), daemon=True).start()
 
     def on_status(s: str) -> None:
+        if status.get(token) != s:
+            log.info("%s: %s", r["channel"], s)
         status[token] = s
 
     while True:
@@ -210,6 +230,42 @@ def manage_url(token: str) -> str:
     return f"{PUBLIC_URL}/m/{token}" if PUBLIC_URL else f"/m/{token}"
 
 
+def ago(ts: float) -> str:
+    if not ts:
+        return "never"
+    s = int(time.time() - ts)
+    return f"{s}s ago" if s < 120 else f"{s // 60}m ago" if s < 7200 else f"{s // 3600}h ago" if s < 172800 else f"{s // 86400}d ago"
+
+
+def admin_body() -> str:
+    e = html.escape
+    live = sum("connected" in status.get(t, "") for t in regs)
+    paid = sum(plan(r) == "paid" for r in regs.values())
+    rows = []
+    for t, r in sorted(regs.items(), key=lambda kv: -kv[1]["created"]):
+        st = stats.get(t, {})
+        rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}</small></td>"
+                    f"<td>{e(r['platform'])} {e(r['channel'])}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
+                    f"<td>{plan(r)}</td><td>{e(status.get(t, 'stopped' if plan(r) == 'pending' else ''))}</td>"
+                    f"<td>{st.get('posts', 0)}<br><small>{ago(st.get('last_post', 0))}</small></td>"
+                    f"<td{' style=color:#ff8a8a' if st.get('fails') else ''}>{st.get('fails', 0)}"
+                    f"<br><small>{e(st.get('last_error', ''))}</small></td>"
+                    f"<td><small>{time.strftime('%Y-%m-%d', time.localtime(r['created']))}</small></td></tr>")
+    logs = "".join(f"<tr{' style=color:#ff8a8a' if lvl in ('WARNING', 'ERROR', 'CRITICAL') else ''}>"
+                   f"<td><small>{time.strftime('%m-%d %H:%M:%S', time.localtime(ts))}</small></td><td><small>{lvl}</small></td>"
+                   f"<td><small>{e(name)}: {e(msg)}</small></td></tr>"
+                   for ts, lvl, name, msg in reversed(logbuf) if name not in ("httpx", "httpcore"))
+    warn = sum(lvl in ("WARNING", "ERROR", "CRITICAL") for _, lvl, _, _ in logbuf)
+    return ('<meta http-equiv="refresh" content="30"><style>body{max-width:1100px}td{vertical-align:top;border-top:1px solid #333}'
+            'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
+            f'<div class="box">{len(regs)} sign-ups: {free_used()}/{FREE_SLOTS} free, {paid} paid, '
+            f'{sum(plan(r) == "pending" for r in regs.values())} waiting for payment. {live} live right now. '
+            f'{warn} warnings in the recent log. <small>Counts since the last server restart; refreshes every 30 s.</small></div>'
+            '<table cellpadding=6 width=100%><tr><th>User</th><th>Channel</th><th>Plan</th><th>Status</th><th>Posts</th>'
+            f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table>'
+            f'<h2>Recent log</h2><table cellpadding=4 width=100%>{logs or "<tr><td>Empty.</td></tr>"}</table>')
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "LiveChatXR"
 
@@ -247,14 +303,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             return self.send(200, home())
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
-            rows = "".join(f"<tr><td>{html.escape(r.get('name', ''))}</td><td>{html.escape(r.get('email', ''))}</td>"
-                           f"<td>{html.escape(r['platform'])} {html.escape(r['channel'])}</td>"
-                           f"<td>{time.strftime('%Y-%m-%d', time.localtime(r['created']))}</td>"
-                           f"<td>{plan(r)}</td><td>{html.escape(status.get(t, ''))}</td></tr>" for t, r in regs.items())
-            paid = sum(plan(r) == "paid" for r in regs.values())
-            return self.send(200, page(f"<h1>Users</h1><p>{free_used()}/{FREE_SLOTS} free, {paid} paid, {len(regs)} total "
-                                       f"(ceiling {MAX_REGS})</p><table cellpadding=6><tr><th>Name</th><th>Email</th>"
-                                       f"<th>Channel</th><th>Joined</th><th>Plan</th><th>Status</th></tr>{rows}</table>"))
+            return self.send(200, page(admin_body()))
         if path == "/discord/callback":
             q = {k: v[0] for k, v in parse_qs(self.path.partition("?")[2]).items()}
             with lock:
@@ -382,6 +431,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    logging.getLogger().addHandler(_Ring(logging.INFO))
     logging.getLogger("httpx").setLevel(logging.WARNING)  # TikTokLive logs every request URL
     try:
         regs.update(json.loads((DATA / "registrations.json").read_text(encoding="utf-8")))

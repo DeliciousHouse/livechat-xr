@@ -57,7 +57,7 @@ def write_banner(text: str) -> None:
     os.replace(tmp, DIR / "banner.txt")  # atomic: the layer never reads a half-written file
 
 
-def post_discord(webhook: str, text: str) -> None:
+def post_discord(webhook: str, text: str) -> bool:
     """Post one batch to a Discord channel webhook. Discord's own app shows it as a notification
     (on Quest that includes pop-ups during games), which is the standalone/companion display path."""
     body = json.dumps({
@@ -69,8 +69,10 @@ def post_discord(webhook: str, text: str) -> None:
                                                 "User-Agent": "LiveChatXR (github.com/DeliciousHouse/livechat-xr)"})
     try:
         urllib.request.urlopen(req, timeout=10).close()
+        return True
     except Exception as e:  # 429 = Discord rate limit (30/min/channel); drop rather than pile up
         log.warning("discord post failed: %s", e)
+        return False
 
 
 # ---------------------------------------------------------------- Twitch (anonymous IRC, no key needed)
