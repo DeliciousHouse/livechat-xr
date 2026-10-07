@@ -78,6 +78,13 @@ class Server(unittest.TestCase):
             self.assertIn("Discord post failed", body)
             self.assertIn("HTTP Error 429 &lt;x&gt;", body)
             self.assertRegex(body, r"3[01]s ago")
+            # backup freshness: missing stamp = red warning, fresh stamp = fine
+            self.assertIn("Backup on server: never ⚠", body)
+            (server.DATA / "last_backup").write_text(str(time.time() - 3600))
+            (server.DATA / "last_offsite").write_text(str(time.time() - 40 * 3600))
+            body = urllib.request.urlopen(f"{self.base}/admin?key={'k' * 32}").read().decode()
+            self.assertIn("Backup on server: 60m ago.", body.replace("</span>", "."))
+            self.assertIn("copy on PC: 40h ago ⚠", body)
             server.stats.clear()
             server.logbuf.clear()
         finally:

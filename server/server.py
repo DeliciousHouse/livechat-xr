@@ -272,6 +272,19 @@ def ago(ts: float) -> str:
     return f"{s}s ago" if s < 120 else f"{s // 60}m ago" if s < 7200 else f"{s // 3600}h ago" if s < 172800 else f"{s // 86400}d ago"
 
 
+def backup_line() -> str:
+    """The nightly backup jobs stamp /data/last_backup (server copy) and /data/last_offsite (copy pulled to the PC)."""
+    parts = []
+    for name, label in (("last_backup", "Backup on server"), ("last_offsite", "copy on PC")):
+        try:
+            ts = float((DATA / name).read_text().strip())
+        except (OSError, ValueError):
+            ts = 0
+        stale = time.time() - ts > 36 * 3600
+        parts.append(f'<span{" style=color:#ff8a8a" if stale else ""}>{label}: {ago(ts)}{" ⚠" if stale else ""}</span>')
+    return ", ".join(parts) + "."
+
+
 def admin_body() -> str:
     e = html.escape
     live = sum("connected" in status.get(t, "") for t in regs)
@@ -295,7 +308,7 @@ def admin_body() -> str:
             'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
             f'<div class="box">{len(regs)} sign-ups: {free_used()}/{FREE_SLOTS} free, {paid} paid, '
             f'{sum(plan(r) == "pending" for r in regs.values())} waiting for payment. {live} live right now. '
-            f'{warn} warnings in the recent log. <small>Counts since the last server restart; refreshes every 30 s.</small></div>'
+            f'{warn} warnings in the recent log.<br>{backup_line()} <small>Refreshes every 30 s.</small></div>'
             '<table cellpadding=6 width=100%><tr><th>User</th><th>Channel</th><th>Plan</th><th>Status</th><th>Posts</th>'
             f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table>'
             f'<h2>Recent log</h2><table cellpadding=4 width=100%>{logs or "<tr><td>Empty.</td></tr>"}</table>')
