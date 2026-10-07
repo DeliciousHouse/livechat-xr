@@ -52,10 +52,25 @@ class Server(unittest.TestCase):
             self.assertEqual(self.post("/register", platform="tiktok", channel="me", webhook=hook)[0], 400, hook)
         self.assertEqual(self.post("/register", platform="tiktok", channel="<script>", webhook=HOOK)[0], 400)
         self.assertEqual(self.post("/register", platform="youtube", channel="me", webhook=HOOK)[0], 400)
+        self.assertEqual(self.post("/register", name="", email="x@y.co", platform="tiktok", channel="me", webhook=HOOK)[0], 400)
+        self.assertEqual(self.post("/register", name="A", email="nope", platform="tiktok", channel="me", webhook=HOOK)[0], 400)
         self.assertEqual(server.regs, {})
 
+    def test_admin_page(self):
+        self.post("/register", name="Ann <b>", email="ann@example.com", platform="tiktok", channel="ann1", webhook=HOOK)
+        server.ADMIN_KEY = "k" * 32
+        try:
+            body = urllib.request.urlopen(f"{self.base}/admin?key={'k' * 32}").read().decode()
+            self.assertIn("ann@example.com", body)
+            self.assertIn("Ann &lt;b&gt;", body)
+            self.assertNotIn(HOOK, body)
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(f"{self.base}/admin?key=wrong")
+        finally:
+            server.ADMIN_KEY = ""
+
     def test_register_update_delete(self):
-        code, headers, _ = self.post("/register", platform="tiktok", channel="crosseyedsensei", webhook=HOOK)
+        code, headers, _ = self.post("/register", name="Bren", email="b@example.com", platform="tiktok", channel="crosseyedsensei", webhook=HOOK)
         self.assertEqual(code, 303)
         token = headers["Location"].rsplit("/", 1)[1]
         self.assertEqual(server.regs[token]["channel"], "@crosseyedsensei")
@@ -64,7 +79,7 @@ class Server(unittest.TestCase):
         page = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
         self.assertNotIn(HOOK, page)  # never echo the webhook URL
         # same webhook again = update in place, same token
-        code, headers, _ = self.post("/register", platform="twitch", channel="#SomeOne", webhook=HOOK)
+        code, headers, _ = self.post("/register", name="Bren", email="b@example.com", platform="twitch", channel="#SomeOne", webhook=HOOK)
         self.assertEqual(headers["Location"], f"/m/{token}")
         self.assertEqual((len(server.regs), server.regs[token]["channel"]), (1, "someone"))
         self.assertEqual(self.post(f"/m/{token}/delete")[0], 200)
@@ -74,8 +89,8 @@ class Server(unittest.TestCase):
     def test_cap(self):
         server.MAX_REGS = 1
         try:
-            self.assertEqual(self.post("/register", platform="tiktok", channel="a1", webhook=HOOK)[0], 303)
-            self.assertEqual(self.post("/register", platform="tiktok", channel="a2", webhook=HOOK[:-1] + "b")[0], 503)
+            self.assertEqual(self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", webhook=HOOK)[0], 303)
+            self.assertEqual(self.post("/register", name="B", email="b@example.com", platform="tiktok", channel="a2", webhook=HOOK[:-1] + "b")[0], 503)
         finally:
             server.MAX_REGS = 50
 

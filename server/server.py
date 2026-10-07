@@ -25,13 +25,15 @@ import chat
 
 DATA = Path(os.environ.get("DATA_DIR", "data"))
 PORT = int(os.environ.get("PORT", "13300"))
-MAX_REGS = int(os.environ.get("MAX_REGS", "50"))  # ponytail: global cap, no per-IP limit; add one if strangers abuse it
+MAX_REGS = int(os.environ.get("MAX_REGS", "5"))  # private beta; raise when a paid tier exists
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
+EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$")}
 log = logging.getLogger("relay")
 
-regs: dict[str, dict] = {}      # token -> {platform, channel, webhook, discord_channel, created}
+regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created}
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 lock = threading.Lock()
@@ -105,6 +107,8 @@ HOME = """<h1>LiveChat XR for Discord</h1>
 Quest, comments pop up in-game, no PC needed.</p>
 {msg}
 <form method="post" action="/register">
+<label>Your name</label><input name="name" required maxlength="60">
+<label>Email</label><input name="email" type="email" required maxlength="200">
 <label>Platform</label><select name="platform"><option value="tiktok">TikTok LIVE</option><option value="twitch">Twitch</option></select>
 <label>Channel / username</label><input name="channel" placeholder="@yourhandle" required maxlength="30">
 <label>Discord webhook URL</label><input name="webhook" placeholder="https://discord.com/api/webhooks/…" required maxlength="200">
@@ -115,7 +119,8 @@ Quest, comments pop up in-game, no PC needed.</p>
 <li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol>
 <b>On your Quest:</b> install Discord, sign in, open that channel → notification settings → <b>All Messages</b>.
 Mute your other servers while streaming if you only want chat pop-ups.</div>
-<p><small>Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
+<p><small>Small private beta, limited spots. Your name and email are only used to know who is using it.
+Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
 Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a></small></p>"""
 
 MANAGE = """<h1>LiveChat XR for Discord</h1>{msg}
@@ -166,6 +171,13 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/":
             return self.send(200, page(HOME.format(msg="")))
+        if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
+            rows = "".join(f"<tr><td>{html.escape(r.get('name', ''))}</td><td>{html.escape(r.get('email', ''))}</td>"
+                           f"<td>{html.escape(r['platform'])} {html.escape(r['channel'])}</td>"
+                           f"<td>{time.strftime('%Y-%m-%d', time.localtime(r['created']))}</td>"
+                           f"<td>{html.escape(status.get(t, ''))}</td></tr>" for t, r in regs.items())
+            return self.send(200, page(f"<h1>Users ({len(regs)}/{MAX_REGS})</h1><table cellpadding=6><tr><th>Name</th>"
+                                       f"<th>Email</th><th>Channel</th><th>Joined</th><th>Status</th></tr>{rows}</table>"))
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
@@ -198,8 +210,11 @@ class Handler(BaseHTTPRequestHandler):
         platform = form.get("platform", "")
         channel = form.get("channel", "")
         webhook = form.get("webhook", "")
+        name, email = form.get("name", "")[:60], form.get("email", "").lower()
         err = None
-        if platform not in CHANNEL or not CHANNEL[platform].match(channel):
+        if not name or not EMAIL.match(email):
+            err = "Please enter your name and a valid email."
+        elif platform not in CHANNEL or not CHANNEL[platform].match(channel):
             err = "That channel name doesn't look right."
         elif not WEBHOOK.match(webhook):
             err = "That isn't a Discord webhook URL. It should start with https://discord.com/api/webhooks/"
@@ -213,9 +228,9 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             token = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if token is None and len(regs) >= MAX_REGS:
-                return self.send(503, page(HOME.format(msg=note("This server is full right now. Try again later.", True))))
+                return self.send(503, page(HOME.format(msg=note("The beta is full right now. Ask the person who shared this link to save you a spot.", True))))
             token = token or secrets.token_urlsafe(24)
-            regs[token] = {"platform": platform, "channel": channel, "webhook": webhook,
+            regs[token] = {"name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
                            "discord_channel": dname, "created": regs.get(token, {}).get("created") or int(time.time())}
             save()
         start(token)
