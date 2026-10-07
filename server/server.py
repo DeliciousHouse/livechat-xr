@@ -1,6 +1,10 @@
 """LiveChat XR relay server: people enter their TikTok/Twitch channel and a Discord webhook; the server
 posts their stream chat to that Discord channel. The Discord app on a standalone Quest pops it up in-game.
 
+Billing: the first FREE_SLOTS sign-ups are free. Later sign-ups are saved as "pending" and start only
+after Stripe reports a paid checkout for them (Payment Link + client_reference_id = their token, verified
+via the signed /stripe-webhook). A cancelled subscription stops the relay again.
+
 No accounts: the webhook URL is the credential (whoever has it can already post there). Registering the
 same webhook again updates it. Each registration gets a private manage link, which is also posted into
 their Discord channel so it can't get lost.
@@ -8,6 +12,8 @@ their Discord channel so it can't get lost.
     DATA_DIR=./data PORT=13300 python server.py      (needs app/chat.py next to it or on PYTHONPATH)
 """
 import asyncio
+import hashlib
+import hmac
 import html
 import json
 import logging
@@ -19,13 +25,18 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 import chat
 
 DATA = Path(os.environ.get("DATA_DIR", "data"))
 PORT = int(os.environ.get("PORT", "13300"))
-MAX_REGS = int(os.environ.get("MAX_REGS", "5"))  # private beta; raise when a paid tier exists
+MAX_REGS = int(os.environ.get("MAX_REGS", "50"))  # hard ceiling, paid or not (one server, one IP)
+FREE_SLOTS = int(os.environ.get("FREE_SLOTS", "5"))
+PAY_MONTHLY = os.environ.get("PAY_MONTHLY", "")  # Stripe Payment Link URLs
+PAY_YEARLY = os.environ.get("PAY_YEARLY", "")
+BILLING_URL = os.environ.get("BILLING_URL", "")  # Stripe customer portal login link (manage / cancel)
+STRIPE_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
@@ -33,7 +44,8 @@ EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$")}
 log = logging.getLogger("relay")
 
-regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created}
+regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created,
+                                #           plan: free|paid|pending, subscription}
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 lock = threading.Lock()
@@ -45,6 +57,29 @@ def save() -> None:
     tmp = DATA / "registrations.tmp"
     tmp.write_text(json.dumps(regs, indent=1), encoding="utf-8")
     os.replace(tmp, DATA / "registrations.json")
+
+
+def plan(r: dict) -> str:
+    return r.get("plan", "free")  # registrations from before billing existed were free
+
+
+def free_used() -> int:
+    return sum(plan(r) == "free" for r in regs.values())
+
+
+def stripe_event(body: bytes, header: str, now: float | None = None) -> dict | None:
+    """Verify a Stripe webhook signature (t=...,v1=...) and return the event, or None if it doesn't check out."""
+    if not STRIPE_SECRET:
+        return None
+    pairs = [p.split("=", 1) for p in header.split(",") if "=" in p]
+    t = next((v for k, v in pairs if k == "t"), "")
+    sigs = [v for k, v in pairs if k == "v1"]
+    if not t.isdigit() or abs((now or time.time()) - int(t)) > 300:
+        return None
+    want = hmac.new(STRIPE_SECRET.encode(), f"{t}.".encode() + body, hashlib.sha256).hexdigest()
+    if not any(hmac.compare_digest(want, sig) for sig in sigs):
+        return None
+    return json.loads(body)
 
 
 def check_webhook(url: str) -> str:
@@ -119,12 +154,12 @@ Quest, comments pop up in-game, no PC needed.</p>
 <li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol>
 <b>On your Quest:</b> install Discord, sign in, open that channel → notification settings → <b>All Messages</b>.
 Mute your other servers while streaming if you only want chat pop-ups.</div>
-<p><small>Small private beta, limited spots. Your name and email are only used to know who is using it.
+<p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.
 Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
 Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a></small></p>"""
 
 MANAGE = """<h1>LiveChat XR for Discord</h1>{msg}
-<div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>
+<div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
 <p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
 whenever you go live.</p>
 <form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form>
@@ -162,10 +197,20 @@ class Handler(BaseHTTPRequestHandler):
         r = regs.get(token)
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
+        billing, st = "", status.get(token, "starting…")
+        if plan(r) == "pending":
+            st = "waiting for payment"
+            q = f"?client_reference_id={token}&prefilled_email={quote(r['email'])}"
+            billing = ('<div class="box"><b>The free spots are taken.</b> Pick a plan to switch it on. It starts within a '
+                       'minute of paying; refresh this page to check.<br>'
+                       f'<a href="{html.escape(PAY_MONTHLY + q)}"><button>$3 / month</button></a> '
+                       f'<a href="{html.escape(PAY_YEARLY + q)}"><button>$25 / year</button></a></div>')
+        elif plan(r) == "paid" and BILLING_URL:
+            billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
         self.send(200, page(MANAGE.format(
             msg=msg, token=token, platform="TikTok" if r["platform"] == "tiktok" else "Twitch",
             channel=html.escape(r["channel"]), dname=html.escape(r["discord_channel"]),
-            status=html.escape(status.get(token, "starting…")))))
+            status=html.escape(st), billing=billing)))
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -175,9 +220,11 @@ class Handler(BaseHTTPRequestHandler):
             rows = "".join(f"<tr><td>{html.escape(r.get('name', ''))}</td><td>{html.escape(r.get('email', ''))}</td>"
                            f"<td>{html.escape(r['platform'])} {html.escape(r['channel'])}</td>"
                            f"<td>{time.strftime('%Y-%m-%d', time.localtime(r['created']))}</td>"
-                           f"<td>{html.escape(status.get(t, ''))}</td></tr>" for t, r in regs.items())
-            return self.send(200, page(f"<h1>Users ({len(regs)}/{MAX_REGS})</h1><table cellpadding=6><tr><th>Name</th>"
-                                       f"<th>Email</th><th>Channel</th><th>Joined</th><th>Status</th></tr>{rows}</table>"))
+                           f"<td>{plan(r)}</td><td>{html.escape(status.get(t, ''))}</td></tr>" for t, r in regs.items())
+            paid = sum(plan(r) == "paid" for r in regs.values())
+            return self.send(200, page(f"<h1>Users</h1><p>{free_used()}/{FREE_SLOTS} free, {paid} paid, {len(regs)} total "
+                                       f"(ceiling {MAX_REGS})</p><table cellpadding=6><tr><th>Name</th><th>Email</th>"
+                                       f"<th>Channel</th><th>Joined</th><th>Plan</th><th>Status</th></tr>{rows}</table>"))
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
@@ -186,6 +233,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if self.path == "/stripe-webhook" and n <= 512 * 1024:
+            return self.stripe(self.rfile.read(n))
         if n > 4096:
             return self.send(413, page(note("Too much data.", True)))
         form = {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
@@ -201,10 +250,41 @@ class Handler(BaseHTTPRequestHandler):
             chat.post_discord(r["webhook"], f"LiveChat XR: test message ✔ Chat from {r['channel']} will show up here.")
             return self.manage(token, note("Test sent. Check your Discord channel (and your Quest)."))
         with lock:
-            regs.pop(token, None)
+            r = regs.pop(token, None)
             save()
         stop(token)
-        self.send(200, page(note("Stopped and deleted. Nothing more will be posted.") + '<p><a href="/">Set up again</a></p>'))
+        extra = ""
+        if r and plan(r) == "paid" and BILLING_URL:
+            extra = (f'<div class="box"><b>Your subscription is still active.</b> To stop billing, '
+                     f'<a href="{html.escape(BILLING_URL)}">cancel it here</a> (sign in with {html.escape(r["email"])}).</div>')
+        self.send(200, page(note("Stopped and deleted. Nothing more will be posted.") + extra + '<p><a href="/">Set up again</a></p>'))
+
+    def stripe(self, body: bytes) -> None:
+        ev = stripe_event(body, self.headers.get("Stripe-Signature", ""))
+        if ev is None:
+            return self.send(400, b"bad signature")
+        obj = ev.get("data", {}).get("object", {})
+        if ev.get("type") == "checkout.session.completed" and obj.get("payment_status") == "paid":
+            token = obj.get("client_reference_id") or ""
+            with lock:
+                r = regs.get(token)
+                if r and plan(r) != "free":
+                    r.update(plan="paid", subscription=obj.get("subscription"))
+                    save()
+            if r and plan(r) == "paid":
+                start(token)
+                chat.post_discord(r["webhook"], "LiveChat XR: payment received ✔ It's on. Chat shows up here while you're live.")
+        elif ev.get("type") == "customer.subscription.deleted":
+            with lock:
+                token = next((t for t, r in regs.items() if r.get("subscription") == obj.get("id")), None)
+                if token:
+                    regs[token]["plan"] = "pending"
+                    save()
+            if token:
+                stop(token)
+                chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended, so chat posting is paused. "
+                                                          f"Renew here: <{manage_url(token)}>")
+        self.send(200, b"ok")
 
     def register(self, form: dict) -> None:
         platform = form.get("platform", "")
@@ -228,14 +308,19 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             token = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if token is None and len(regs) >= MAX_REGS:
-                return self.send(503, page(HOME.format(msg=note("The beta is full right now. Ask the person who shared this link to save you a spot.", True))))
+                return self.send(503, page(HOME.format(msg=note("This server is full right now. Try again later.", True))))
+            old = regs.get(token, {}) if token else {}
             token = token or secrets.token_urlsafe(24)
-            regs[token] = {"name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
-                           "discord_channel": dname, "created": regs.get(token, {}).get("created") or int(time.time())}
+            p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")
+            regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
+                           "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p}
             save()
-        start(token)
-        chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel} will show up here while you're live.\n"
-                                   f"Manage or stop it: <{manage_url(token)}>")
+        if p == "pending":
+            chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel}: <{manage_url(token)}>")
+        else:
+            start(token)
+            chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel} will show up here while you're live.\n"
+                                       f"Manage or stop it: <{manage_url(token)}>")
         self.send(303, b"", location=f"/m/{token}")
 
     def log_message(self, fmt, *args):  # keep tokens out of logs
@@ -249,7 +334,7 @@ def main() -> None:
         regs.update(json.loads((DATA / "registrations.json").read_text(encoding="utf-8")))
     except FileNotFoundError:
         pass
-    for i, token in enumerate(regs):
+    for i, token in enumerate(t for t, r in regs.items() if plan(r) != "pending"):
         start(token, delay=i * 3)
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

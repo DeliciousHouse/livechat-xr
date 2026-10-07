@@ -1,5 +1,9 @@
 """Relay server: input validation at the trust boundary, register/update/delete flow. No network."""
+import hashlib
+import hmac
+import json
 import os
+import time
 import sys
 import tempfile
 import threading
@@ -85,6 +89,46 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post(f"/m/{token}/delete")[0], 200)
         self.assertEqual(server.regs, {})
         self.assertEqual(self.post(f"/m/{token}/test")[0], 404)
+
+    def webhook_event(self, event, secret="whsec_test", ts=None):
+        body = json.dumps(event).encode()
+        ts = str(ts or int(time.time()))
+        sig = hmac.new(secret.encode(), f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+        req = urllib.request.Request(self.base + "/stripe-webhook", body, {"Stripe-Signature": f"t={ts},v1={sig}"})
+        try:
+            return self.open(req).status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_free_slots_then_paid(self):
+        server.FREE_SLOTS, server.STRIPE_SECRET = 1, "whsec_test"
+        server.PAY_MONTHLY = "https://buy.stripe.com/m"
+        try:
+            hook2 = HOOK[:-1] + "b"
+            self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", webhook=HOOK)
+            code, headers, _ = self.post("/register", name="B", email="b@example.com", platform="tiktok", channel="b1", webhook=hook2)
+            token = headers["Location"].rsplit("/", 1)[1]
+            self.assertEqual(server.regs[token]["plan"], "pending")
+            self.assertEqual(len(self.started), 1)  # the pending one is not running
+            page = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
+            self.assertIn(f"https://buy.stripe.com/m?client_reference_id={token}", page)
+            paid = {"type": "checkout.session.completed",
+                    "data": {"object": {"client_reference_id": token, "payment_status": "paid", "subscription": "sub_1"}}}
+            self.assertEqual(self.webhook_event(paid, secret="wrong"), 400)  # forged
+            self.assertEqual(self.webhook_event(paid, ts=int(time.time()) - 3600), 400)  # replayed
+            self.assertEqual(server.regs[token]["plan"], "pending")
+            self.assertEqual(self.webhook_event(paid), 200)
+            self.assertEqual((server.regs[token]["plan"], self.started[-1]), ("paid", token))
+            # a free user can't be "upgraded" by someone paying with their token, and stays free
+            free_token = next(t for t, r in server.regs.items() if r["plan"] == "free")
+            paid["data"]["object"]["client_reference_id"] = free_token
+            self.webhook_event(paid)
+            self.assertEqual(server.regs[free_token]["plan"], "free")
+            gone = {"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_1"}}}
+            self.assertEqual(self.webhook_event(gone), 200)
+            self.assertEqual(server.regs[token]["plan"], "pending")
+        finally:
+            server.FREE_SLOTS, server.STRIPE_SECRET, server.PAY_MONTHLY = 5, "", ""
 
     def test_cap(self):
         server.MAX_REGS = 1
