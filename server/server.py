@@ -22,6 +22,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +38,8 @@ PAY_MONTHLY = os.environ.get("PAY_MONTHLY", "")  # Stripe Payment Link URLs
 PAY_YEARLY = os.environ.get("PAY_YEARLY", "")
 BILLING_URL = os.environ.get("BILLING_URL", "")  # Stripe customer portal login link (manage / cancel)
 STRIPE_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+DISCORD_ID = os.environ.get("DISCORD_CLIENT_ID", "")  # one-click "Connect Discord" (OAuth scope webhook.incoming)
+DISCORD_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
@@ -49,6 +52,7 @@ regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webh
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 lock = threading.Lock()
+oauth: dict[str, tuple[float, dict]] = {}  # state -> (created, sign-up form) while the user is on Discord
 loop = asyncio.new_event_loop()
 
 
@@ -146,12 +150,11 @@ Quest, comments pop up in-game, no PC needed.</p>
 <label>Email</label><input name="email" type="email" required maxlength="200">
 <label>Platform</label><select name="platform"><option value="tiktok">TikTok LIVE</option><option value="twitch">Twitch</option></select>
 <label>Channel / username</label><input name="channel" placeholder="@yourhandle" required maxlength="30">
-<label>Discord webhook URL</label><input name="webhook" placeholder="https://discord.com/api/webhooks/…" required maxlength="200">
-<button>Connect</button></form>
-<div class="box"><b>Getting a webhook URL (1 minute)</b><ol>
+{discord}</form>
+<div class="box">{manual_help}
 <li>In Discord, open a server you own (a new private one is fine) and make a channel like <code>#stream-chat</code>.</li>
 <li>Channel settings (gear) → <b>Integrations</b> → <b>Webhooks</b> → <b>New Webhook</b> → <b>Copy Webhook URL</b>.</li>
-<li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol>
+<li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>
 <b>On your Quest:</b> install Discord, sign in, open that channel → notification settings → <b>All Messages</b>.
 Mute your other servers while streaming if you only want chat pop-ups.</div>
 <p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.
@@ -166,6 +169,33 @@ whenever you go live.</p>
 <form class="inline" method="post" action="/m/{token}/delete" onsubmit="return confirm('Stop posting chat to Discord?')">
 <button class="alt">Stop and delete</button></form>
 <p><a href="/">Set up another channel</a></p>"""
+
+
+WEBHOOK_FIELD = ('<label>Discord webhook URL</label><input name="webhook" placeholder="https://discord.com/api/webhooks/…" '
+                 'maxlength="200"{req}>')
+
+
+def home(msg: str = "") -> bytes:
+    if DISCORD_ID:
+        discord = ('<button name="via" value="discord">Connect Discord</button><p><small>Discord asks which server and channel '
+                   'to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</small></p>'
+                   '<details><summary><small>Or paste a webhook URL instead</small></summary>'
+                   + WEBHOOK_FIELD.format(req="") + '<button name="via" value="webhook">Connect with webhook</button></details>')
+        manual = '<details><summary><b>Getting a webhook URL by hand</b></summary><ol>'
+    else:
+        discord = WEBHOOK_FIELD.format(req=" required") + '<button>Connect</button>'
+        manual = '<details open><summary><b>Getting a webhook URL (1 minute)</b></summary><ol>'
+    return page(HOME.format(msg=msg, discord=discord, manual_help=manual))
+
+
+def discord_exchange(code: str) -> str:
+    """OAuth code -> the webhook URL Discord created in the channel the user picked."""
+    body = urllib.parse.urlencode({"client_id": DISCORD_ID, "client_secret": DISCORD_SECRET, "grant_type": "authorization_code",
+                                   "code": code, "redirect_uri": f"{PUBLIC_URL}/discord/callback"}).encode()
+    req = urllib.request.Request("https://discord.com/api/oauth2/token", body,
+                                 {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "LiveChatXR relay"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)["webhook"]["url"]
 
 
 def page(body: str) -> bytes:
@@ -215,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
-            return self.send(200, page(HOME.format(msg="")))
+            return self.send(200, home())
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
             rows = "".join(f"<tr><td>{html.escape(r.get('name', ''))}</td><td>{html.escape(r.get('email', ''))}</td>"
                            f"<td>{html.escape(r['platform'])} {html.escape(r['channel'])}</td>"
@@ -225,6 +255,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, page(f"<h1>Users</h1><p>{free_used()}/{FREE_SLOTS} free, {paid} paid, {len(regs)} total "
                                        f"(ceiling {MAX_REGS})</p><table cellpadding=6><tr><th>Name</th><th>Email</th>"
                                        f"<th>Channel</th><th>Joined</th><th>Plan</th><th>Status</th></tr>{rows}</table>"))
+        if path == "/discord/callback":
+            q = {k: v[0] for k, v in parse_qs(self.path.partition("?")[2]).items()}
+            with lock:
+                for k in [k for k, (t, _) in oauth.items() if time.time() - t > 900]:
+                    oauth.pop(k)
+                entry = oauth.pop(q.get("state", ""), None)
+            if not entry:
+                return self.send(400, home(note("That Discord sign-in expired. Please fill in the form again.", True)))
+            if "code" not in q:
+                return self.send(400, home(note("Discord connection was cancelled. Try again, or paste a webhook URL instead.", True)))
+            try:
+                webhook = discord_exchange(q["code"])
+            except Exception as e:
+                log.warning("discord oauth: %r", e)
+                return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True)))
+            return self.register({**entry[1], "webhook": webhook, "via": "webhook"})
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
@@ -296,19 +342,26 @@ class Handler(BaseHTTPRequestHandler):
             err = "Please enter your name and a valid email."
         elif platform not in CHANNEL or not CHANNEL[platform].match(channel):
             err = "That channel name doesn't look right."
+        elif form.get("via") == "discord" and DISCORD_ID:
+            state = secrets.token_urlsafe(24)
+            with lock:
+                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "platform", "channel")})
+            q = urllib.parse.urlencode({"client_id": DISCORD_ID, "response_type": "code", "scope": "webhook.incoming",
+                                        "redirect_uri": f"{PUBLIC_URL}/discord/callback", "state": state})
+            return self.send(303, b"", location=f"https://discord.com/oauth2/authorize?{q}")
         elif not WEBHOOK.match(webhook):
             err = "That isn't a Discord webhook URL. It should start with https://discord.com/api/webhooks/"
         if err:
-            return self.send(400, page(HOME.format(msg=note(err, True))))
+            return self.send(400, home(note(err, True)))
         channel = ("@" + channel.lstrip("@")) if platform == "tiktok" else channel.lstrip("#").lower()
         try:
             dname = check_webhook(webhook)
         except Exception:
-            return self.send(400, page(HOME.format(msg=note("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.", True))))
+            return self.send(400, home(note("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.", True)))
         with lock:
             token = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if token is None and len(regs) >= MAX_REGS:
-                return self.send(503, page(HOME.format(msg=note("This server is full right now. Try again later.", True))))
+                return self.send(503, home(note("This server is full right now. Try again later.", True)))
             old = regs.get(token, {}) if token else {}
             token = token or secrets.token_urlsafe(24)
             p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")

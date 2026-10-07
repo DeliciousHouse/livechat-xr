@@ -130,6 +130,33 @@ class Server(unittest.TestCase):
         finally:
             server.FREE_SLOTS, server.STRIPE_SECRET, server.PAY_MONTHLY = 5, "", ""
 
+    def test_discord_one_click(self):
+        server.DISCORD_ID, server.PUBLIC_URL = "123", "https://relay.example"
+        server.discord_exchange = lambda code: HOOK if code == "good" else (_ for _ in ()).throw(ValueError("bad code"))
+        try:
+            self.assertIn(b"Connect Discord", urllib.request.urlopen(self.base + "/").read())
+            code, headers, _ = self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", via="discord")
+            loc = urllib.parse.urlparse(headers["Location"])
+            q = dict(urllib.parse.parse_qsl(loc.query))
+            self.assertEqual((code, loc.netloc, q["scope"], q["redirect_uri"]),
+                             (303, "discord.com", "webhook.incoming", "https://relay.example/discord/callback"))
+            self.assertEqual(server.regs, {})  # nothing saved until Discord comes back
+            bad = self.open  # forged/unknown state is refused
+            with self.assertRaises(urllib.error.HTTPError):
+                bad(f"{self.base}/discord/callback?state=nope&code=good")
+            r = None
+            try:
+                bad(f"{self.base}/discord/callback?state={q['state']}&code=good")
+            except urllib.error.HTTPError as e:
+                r = e
+            self.assertEqual(r.code, 303)  # redirect to the manage page
+            (token, reg), = server.regs.items()
+            self.assertEqual((reg["webhook"], reg["channel"], reg["plan"]), (HOOK, "@a1", "free"))
+            with self.assertRaises(urllib.error.HTTPError):  # a state works once
+                bad(f"{self.base}/discord/callback?state={q['state']}&code=good")
+        finally:
+            server.DISCORD_ID, server.PUBLIC_URL = "", ""
+
     def test_cap(self):
         server.MAX_REGS = 1
         try:
