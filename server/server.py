@@ -216,7 +216,24 @@ Quest, comments pop up in-game, no PC needed.</p>
 Mute your other servers while streaming if you only want chat pop-ups.</div>
 <p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.{ga_note}
 Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
-Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a></small></p>"""
+Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a> ·
+<a href="/privacy">Privacy</a></small></p>"""
+
+PRIVACY = """<h1>Privacy</h1>
+<p>LiveChat XR for Discord posts your TikTok LIVE or Twitch chat into a Discord channel you choose. This is everything it keeps.</p>
+<div class="box"><b>What we store</b><ul>
+<li>Your name and email: typed in, or taken from your Google account if you use Continue with Google
+(only your name and email address; nothing else from Google).</li>
+<li>Your TikTok or Twitch channel name and the Discord webhook for your channel.</li>
+<li>Counts of messages posted and failed, for troubleshooting. Chat messages are passed straight to Discord, not stored.</li>
+<li>If you pay, Stripe handles the payment; we only keep the subscription ID.</li></ul></div>
+<div class="box"><b>What we don't do</b><ul><li>We don't sell or share your details. They are only used to run the relay and to
+know who is using it.</li><li>We don't post anywhere except the Discord channel you connected.</li></ul></div>
+<div class="box"><b>Analytics</b><br>{ga}</div>
+<div class="box"><b>Deleting your data</b><br>Use <b>Stop and delete</b> on your private manage page (the link is also
+posted in your Discord channel). That removes your registration right away. Backup copies roll off within 90 days.
+Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
+<p><a href="/">Back</a></p>"""
 
 MANAGE = """<h1>LiveChat XR for Discord</h1>{msg}
 <div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
@@ -402,6 +419,10 @@ class Handler(BaseHTTPRequestHandler):
                 log.warning("discord oauth: %r", e)
                 return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True)))
             return self.register({**entry[1], "webhook": webhook, "via": "webhook"})
+        if path == "/privacy":
+            ga = ("Visits to these pages are counted with Google Analytics (pages viewed, rough location, device type)."
+                  if GA_ID else "None.")
+            return self.send(200, page(PRIVACY.format(ga=ga), ga="/privacy"))
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):

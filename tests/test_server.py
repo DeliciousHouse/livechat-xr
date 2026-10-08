@@ -226,6 +226,11 @@ class Server(unittest.TestCase):
         finally:
             server.GA_ID = server.ADMIN_KEY = ""
 
+    def test_privacy_page(self):
+        body = urllib.request.urlopen(self.base + "/privacy").read().decode()
+        self.assertIn("Stop and delete", body)
+        self.assertIn('href="/privacy"', urllib.request.urlopen(self.base + "/").read().decode())
+
     def test_cap(self):
         server.MAX_REGS = 1
         try:
