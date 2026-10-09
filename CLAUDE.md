@@ -53,3 +53,8 @@ Cross-component contracts to keep in sync:
 - Keep it dependency-light: the app needs only `TikTokLive`, `pystray`, `Pillow`; the server only `TikTokLive` (stdlib for HTTP, Discord, Stripe signature checks). Versions are pinned in `app/requirements.txt` and `server/Dockerfile`; bump both together.
 - Discord posts always set `allowed_mentions: {"parse": []}` so chat text can't ping anyone. The webhook URL is the user's credential: never render it in pages or logs.
 - User-facing behaviour changes generally need a README update (it is the user manual).
+
+## Design System
+Read DESIGN.md before visual or UI work: it defines the fonts, colors, spacing, and
+aesthetic direction. Ask the user before departing from it. When reviewing or QA-ing
+UI, flag code that doesn't match DESIGN.md.
