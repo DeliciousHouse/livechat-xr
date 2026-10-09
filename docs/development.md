@@ -8,7 +8,7 @@ Run the existing Python tests and native layer tests without installing an overl
 - Windows x64 for the tray app and native DLL tests; CI uses Windows and Python 3.12.
 - Python 3.12, or [uv](https://docs.astral.sh/uv/getting-started/installation/) to select that interpreter.
 - Visual Studio 2022 Build Tools with the C++ x64 tools for the DLL. The script expects the BuildTools edition at its default path unless `cl` is already on PATH.
-- Inno Setup 6 only when building an installer; see the [release/deploy runbook](operations.md#release-and-deploy-owner).
+- Inno Setup 6 only when building an installer; see the [release/deploy runbook](deployment.md).
 
 Examples below use Windows Command Prompt, not PowerShell or WSL. In a shell that injects an unrelated PYTHONPATH, clear it for these project processes first. Do not copy a global Hermes Python environment into this project.
 
@@ -69,7 +69,7 @@ Do not submit a real webhook just to check rendering. HTTP registration, update/
 
 The [workflow](../.github/workflows/build.yml) builds the DLL, tests, packages the Windows tray app with PyInstaller, smoke-tests the bundled dependencies, and compiles the Inno installer. Installer source is [livechat-xr.iss](../installer/livechat-xr.iss). `v*` tag builds publish a release; tags containing `-` are pre-releases. Do not push a release tag just to test docs.
 
-The CI/CD card owns exact packaging/release commands, SHA256 publication, Dora deployment and rollback. Use the [canonical runbook entry](operations.md#release-and-deploy-owner) for those procedures rather than duplicating them here.
+The CI/CD card owns exact packaging/release commands, SHA256 publication, Dora deployment and rollback. Use the [canonical runbook](deployment.md) for those procedures rather than duplicating them here.
 
 ## Troubleshooting development
 

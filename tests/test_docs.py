@@ -9,6 +9,13 @@ DOCS = ("user-guide.md", "reference.md", "architecture.md", "development.md", "o
 
 
 class Docs(unittest.TestCase):
+    def test_canonical_runbook_navigation(self):
+        for name in ("operations.md", "development.md"):
+            with self.subTest(source=name):
+                text = (ROOT / "docs" / name).read_text(encoding="utf-8")
+                self.assertRegex(text, r"\]\(deployment\.md\)")
+                self.assertNotIn("release-deploy.md", text)
+
     def test_links_and_discoverability(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for name in DOCS:

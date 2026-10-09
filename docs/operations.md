@@ -10,7 +10,7 @@ The [Dockerfile](../server/Dockerfile) copies `app/chat.py` and `server/server.p
 
 ## Release and deploy owner
 
-CI/CD card `t_7fe554c8` owns the canonical **docs/release-deploy.md** runbook. That file is being delivered separately; this docs branch does not invent or duplicate its commands. Follow it when available in the merged tree. Until that delivery is reviewed, deployment, backup/restore and rotation procedures are pending, not verified here.
+CI/CD card `t_7fe554c8` owns the [canonical release/deploy runbook](deployment.md). Use that existing runbook for release, deployment and rollback procedures; this index does not duplicate its commands. Source delivery is not proof of live deployment, backup/restore or secret-rotation acceptance; verify the operational evidence separately.
 
 The canonical runbook must cover:
 
