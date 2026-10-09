@@ -24,9 +24,11 @@ DEFAULTS = {
 log = logging.getLogger("livechatxr")
 
 
-def load_config() -> configparser.ConfigParser:
+def load_config(portable: bool = False) -> configparser.ConfigParser:
     cp = configparser.ConfigParser()
     cp.read_dict(DEFAULTS)
+    if portable:
+        cp["games"]["exes"] = "LiveChatXR-QA-NotAGame.exe"
     cp.read(DIR / "config.ini", encoding="utf-8")
     return cp
 

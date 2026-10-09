@@ -110,6 +110,10 @@ python -m venv .venv && .venv\Scripts\pip install -r app\requirements.txt pyinst
 
 CI builds the installer on every push, and pushing a `v*` tag publishes a GitHub release.
 
+For isolated relay simulation and visible Windows Settings without touching the installed profile,
+see [QA fixtures](docs/qa-fixtures.md). CI also uploads `LiveChatXR-Portable` for alternate-data testing
+without running an installer.
+
 ## License
 
 MIT for LiveChat XR's code. Bundled components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
