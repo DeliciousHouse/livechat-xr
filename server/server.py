@@ -139,6 +139,45 @@ def check_webhook(url: str) -> str:
         return json.load(r).get("name") or "webhook"
 
 
+def normalise_channel(platform: str, channel: str) -> str:
+    channel = channel.strip()
+    if channel.startswith(("https://", "http://")):
+        try:
+            url = urllib.parse.urlparse(channel)
+        except ValueError:
+            return channel  # malformed URLs fail the existing channel syntax check
+        hosts = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
+                 "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv")}
+        if url.hostname in hosts.get(platform, ()):
+            channel = url.path.strip("/").split("/")[0]
+    if platform == "tiktok":
+        return "@" + channel.lstrip("@")
+    return channel.lstrip("@#").lower()
+
+
+def check_channel(platform: str, channel: str) -> bool | None:
+    """True = exists (live or offline), False = unavailable, None = inconclusive.
+
+    Use the profile, not TikTokLive's LIVE API: UserNotFoundError there can also mean never streamed.
+    Twitch's authenticated Helix API has no cheap anonymous equivalent; IRC remains unchanged.
+    """
+    if platform != "tiktok":
+        return True
+    req = urllib.request.Request(f"https://www.tiktok.com/{channel}", headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        text = r.read(2_000_000).decode("utf-8", "replace")
+    match = re.search(r'<script\b[^>]*\bid="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', text, re.S)
+    if not match:
+        return None  # captcha, rate limit, or changed page format: fail open
+    detail = json.loads(match[1]).get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {})
+    user = detail.get("userInfo", {}).get("user", {}).get("uniqueId", "")
+    if user.lower() == channel.lstrip("@").lower():
+        return True
+    if detail.get("statusCode") in (10202, 10221):  # missing / unavailable (also returned for banned profiles)
+        return False
+    return None
+
+
 async def run(token: str, delay: float = 0) -> None:
     await asyncio.sleep(delay)  # stagger startup: TikTok's sign server rate-limits connects per IP
     r = regs[token]
@@ -203,10 +242,11 @@ HOME = """<h1>LiveChat XR for Discord</h1>
 Quest, comments pop up in-game, no PC needed.</p>
 {msg}
 <form method="post" action="/register">
-{google}<label>Your name</label><input id="name" name="name" required maxlength="60">
-<label>Email</label><input id="email" name="email" type="email" required maxlength="200">
-<label>Platform</label><select name="platform"><option value="tiktok">TikTok LIVE</option><option value="twitch">Twitch</option></select>
-<label>Channel / username</label><input name="channel" placeholder="@yourhandle" required maxlength="30">
+{google}<label for="name">Your name</label><input id="name" name="name" value="{name}" required maxlength="60">
+<label for="email">Email</label><input id="email" name="email" type="email" value="{email}" required maxlength="200">
+<label for="platform">Platform</label><select id="platform" name="platform"><option value="tiktok"{tiktok}>TikTok LIVE</option><option value="twitch"{twitch}>Twitch</option></select>
+<label for="channel">Channel / username</label><input id="channel" name="channel" value="{channel}" placeholder="@yourhandle or profile URL" required maxlength="200">
+<small>Enter your username or full profile URL; the @ is optional.</small>
 {discord}</form>
 <div class="box">{manual_help}
 <li>In Discord, open a server you own (a new private one is fine) and make a channel like <code>#stream-chat</code>.</li>
@@ -245,19 +285,21 @@ whenever you go live.</p>
 <p><a href="/">Set up another channel</a></p>"""
 
 
-WEBHOOK_FIELD = ('<label>Discord webhook URL</label><input name="webhook" placeholder="https://discord.com/api/webhooks/…" '
-                 'maxlength="200"{req}>')
+WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input id="webhook" name="webhook" placeholder="https://discord.com/api/webhooks/…" '
+                 'value="{webhook}" maxlength="200"{req}>')
 
 
-def home(msg: str = "") -> bytes:
+def home(msg: str = "", form: dict | None = None) -> bytes:
+    form = form or {}
+    values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "channel", "webhook")}
     if DISCORD_ID:
         discord = ('<button name="via" value="discord">Connect Discord</button><p><small>Discord asks which server and channel '
                    'to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</small></p>'
                    '<details><summary><small>Or paste a webhook URL instead</small></summary>'
-                   + WEBHOOK_FIELD.format(req="") + '<button name="via" value="webhook">Connect with webhook</button></details>')
+                   + WEBHOOK_FIELD.format(req="", webhook=values["webhook"]) + '<button name="via" value="webhook">Connect with webhook</button></details>')
         manual = '<details><summary><b>Getting a webhook URL by hand</b></summary><ol>'
     else:
-        discord = WEBHOOK_FIELD.format(req=" required") + '<button>Connect</button>'
+        discord = WEBHOOK_FIELD.format(req=" required", webhook=values["webhook"]) + '<button>Connect</button>'
         manual = '<details open><summary><b>Getting a webhook URL (1 minute)</b></summary><ol>'
     google = ""
     if GOOGLE_ID:  # Google Identity Services: the ID token rides along in the form and is verified in register()
@@ -270,7 +312,9 @@ def home(msg: str = "") -> bytes:
                   'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
                   'gwho.innerHTML="<small>Signed in with Google \u2714</small>"}</script>')
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
-    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note), ga="/")
+    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note,
+                            tiktok=" selected" if form.get("platform") != "twitch" else "",
+                            twitch=" selected" if form.get("platform") == "twitch" else "", **values), ga="/")
 
 
 def google_identity(credential: str) -> tuple[str, str]:
@@ -307,7 +351,7 @@ def page(body: str, ga: str = "", event: str = "") -> bytes:
 
 
 def note(text: str, err: bool = False) -> str:
-    return f'<div class="box{" err" if err else ""}">{html.escape(text)}</div>'
+    return f'<div class="box{" err" if err else ""}" role="{"alert" if err else "status"}">{html.escape(text)}</div>'
 
 
 def manage_url(token: str) -> str:
@@ -382,6 +426,9 @@ class Handler(BaseHTTPRequestHandler):
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
         billing, st = "", status.get(token, "starting…")
+        if st.startswith("TikTok: can't find"):
+            msg += note("To correct your channel, use Set up another channel below with the same Discord webhook. "
+                        "This updates your existing registration; no need to delete it.")
         if plan(r) == "pending":
             st = "waiting for payment"
             q = f"?client_reference_id={token}&prefilled_email={quote(r['email'])}"
@@ -392,7 +439,8 @@ class Handler(BaseHTTPRequestHandler):
         elif plan(r) == "paid" and BILLING_URL:
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
         self.send(200, page(MANAGE.format(
-            msg=msg, token=token, platform="TikTok" if r["platform"] == "tiktok" else "Twitch",
+            msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
+            platform="TikTok" if r["platform"] == "tiktok" else "Twitch",
             channel=html.escape(r["channel"]), dname=html.escape(r["discord_channel"]),
             status=html.escape(st), billing=billing),
             ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else ""))
@@ -487,7 +535,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def register(self, form: dict) -> None:
         platform = form.get("platform", "")
-        channel = form.get("channel", "")
+        channel = normalise_channel(platform, form.get("channel", ""))
         webhook = form.get("webhook", "")
         err = None
         if form.get("google") and GOOGLE_ID:
@@ -504,7 +552,20 @@ class Handler(BaseHTTPRequestHandler):
             err = "Please enter your name and a valid email."
         elif platform not in CHANNEL or not CHANNEL[platform].match(channel):
             err = "That channel name doesn't look right."
-        elif form.get("via") == "discord" and DISCORD_ID:
+        if err:
+            return self.send(400, home(note(err, True), form))
+        channel_note = ""
+        try:
+            exists = check_channel(platform, channel)
+        except Exception as e:
+            log.warning("channel check: %s", type(e).__name__)  # no credentials or remote response in logs
+            exists = None
+        if exists is False:
+            label = "TikTok" if platform == "tiktok" else "Twitch"
+            return self.send(400, home(note(f"We can't find that {label} account. Check the spelling, without the @", True), form))
+        if exists is None:
+            channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
+        if form.get("via") == "discord" and DISCORD_ID:
             state = secrets.token_urlsafe(24)
             with lock:
                 oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "platform", "channel", "signin")})
@@ -514,12 +575,11 @@ class Handler(BaseHTTPRequestHandler):
         elif not WEBHOOK.match(webhook):
             err = "That isn't a Discord webhook URL. It should start with https://discord.com/api/webhooks/"
         if err:
-            return self.send(400, home(note(err, True)))
-        channel = ("@" + channel.lstrip("@")) if platform == "tiktok" else channel.lstrip("#").lower()
+            return self.send(400, home(note(err, True), form))
         try:
             dname = check_webhook(webhook)
         except Exception:
-            return self.send(400, home(note("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.", True)))
+            return self.send(400, home(note("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.", True), form))
         with lock:
             token = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if token is None and len(regs) >= MAX_REGS:
@@ -529,7 +589,7 @@ class Handler(BaseHTTPRequestHandler):
             p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
                            "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p,
-                           "signin": form.get("signin") or "email"}
+                           "signin": form.get("signin") or "email", "channel_note": channel_note}
             save()
         if p == "pending":
             chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel}: <{manage_url(token)}>")

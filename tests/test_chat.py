@@ -78,6 +78,26 @@ class Twitch(unittest.TestCase):
 
 
 class TikTok(unittest.TestCase):
+    def test_missing_user_backs_off_and_resets_after_offline_or_error(self):
+        from TikTokLive.client.errors import UserNotFoundError, UserOfflineError
+        missing = UserNotFoundError("me", "missing")
+        outcomes = [missing] * 6 + [UserOfflineError("offline"), missing, OSError("outage"), missing]
+        client = mock.Mock(on=lambda cls: lambda fn: fn, connected=False)
+        client.connect = mock.AsyncMock(side_effect=outcomes)
+        sleeps, statuses = [], []
+
+        async def sleep(delay):
+            sleeps.append(delay)
+            if len(sleeps) == len(outcomes):
+                raise asyncio.CancelledError
+
+        with mock.patch("TikTokLive.TikTokLiveClient", return_value=client), mock.patch("asyncio.sleep", sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(chat.tiktok("@me", lambda s: None, statuses.append))
+        self.assertEqual(sleeps, [60, 60, 60, 60, 1800, 1800, 60, 60, 60, 60])
+        self.assertIn("Check the spelling or permission to go LIVE", statuses[4])
+        self.assertIn("30 minutes", statuses[4])
+
     def test_gifts_and_comments(self):
         """Fake TikTokLiveClient that replays events through the handlers chat.tiktok registers."""
         from TikTokLive.events import CommentEvent, GiftEvent

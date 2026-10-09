@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -26,10 +27,57 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class ChannelCheck(unittest.TestCase):
+    def profile(self, detail):
+        return ('<script nonce="test" id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">'
+                + json.dumps({"__DEFAULT_SCOPE__": {"webapp.user-detail": detail}}) + '</script>').encode()
+
+    def check(self, body):
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = body
+        with mock.patch("urllib.request.urlopen", return_value=response) as request:
+            result = server.check_channel("tiktok", "@ann1")
+        self.assertEqual(request.call_args.args[0].full_url, "https://www.tiktok.com/@ann1")
+        self.assertEqual(request.call_args.kwargs["timeout"], 10)
+        return result
+
+    def test_existing_offline_profile_is_accepted(self):
+        self.assertIs(self.check(self.profile({"statusCode": 0, "userInfo": {"user": {"uniqueId": "Ann1"}}})), True)
+
+    def test_missing_or_unavailable_profile(self):
+        for code in (10202, 10221):
+            self.assertIs(self.check(self.profile({"statusCode": code})), False)
+
+    def test_unknown_shell_private_or_mismatched_response_is_inconclusive(self):
+        for body in (b"captcha", self.profile({"statusCode": 10222}), self.profile({}),
+                     self.profile({"statusCode": 0, "userInfo": {"user": {"uniqueId": "someone_else"}}})):
+            self.assertIsNone(self.check(body))
+
+    def test_network_and_bad_json_propagate_for_fail_open_registration(self):
+        with mock.patch("urllib.request.urlopen", side_effect=TimeoutError):
+            with self.assertRaises(TimeoutError):
+                server.check_channel("tiktok", "@ann1")
+        with self.assertRaises(json.JSONDecodeError):
+            self.check(b'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{bad}</script>')
+
+    def test_twitch_no_anonymous_check_and_url_host_allowlist(self):
+        with mock.patch("urllib.request.urlopen") as request:
+            self.assertTrue(server.check_channel("twitch", "ann1"))
+            request.assert_not_called()
+        for raw in ("https://tiktok.com.evil.test/@ann1", "https://example.com/@ann1", "https://[broken"):
+            normal = server.normalise_channel("tiktok", raw)
+            self.assertIsNone(server.CHANNEL["tiktok"].match(normal))
+
+
 class Server(unittest.TestCase):
     def setUp(self):
         server.DATA = Path(tempfile.mkdtemp())
         server.regs.clear()
+        server.status.clear()
+        self.check_channel = mock.Mock(return_value=True)
+        patcher = mock.patch.object(server, "check_channel", self.check_channel)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.posts, self.started = [], []
         server.check_webhook = lambda url: "LiveChat XR"
         self.addCleanup(setattr, chat, "post_discord", chat.post_discord)  # other test modules need the real one
@@ -107,6 +155,70 @@ class Server(unittest.TestCase):
         self.assertEqual(self.post(f"/m/{token}/delete")[0], 200)
         self.assertEqual(server.regs, {})
         self.assertEqual(self.post(f"/m/{token}/test")[0], 404)
+
+    def test_missing_channel_keeps_escaped_form_without_saving(self):
+        self.check_channel.return_value = False
+        code, _, body = self.post("/register", name='Ann "<b>', email="ann@example.com",
+                                  platform="twitch", channel="missing", webhook=HOOK)
+        self.assertEqual(code, 400)
+        self.assertIn("We can&#x27;t find that Twitch account", body)
+        self.assertIn('value="Ann &quot;&lt;b&gt;"', body)
+        self.assertIn('value="ann@example.com"', body)
+        self.assertIn('value="missing"', body)
+        self.assertIn(f'value="{HOOK}"', body)
+        self.assertIn('value="twitch" selected', body)
+        self.assertEqual((server.regs, self.posts, self.started), ({}, [], []))
+
+    def test_tiktok_missing_error_before_discord_oauth(self):
+        with mock.patch.object(server, "DISCORD_ID", "123"):
+            self.check_channel.return_value = False
+            code, _, body = self.post("/register", name="Ann", email="ann@example.com",
+                                      platform="tiktok", channel="missing", via="discord")
+        self.assertEqual(code, 400)
+        self.assertIn("We can&#x27;t find that TikTok account. Check the spelling, without the @", body)
+        self.assertEqual(server.regs, {})
+
+    def test_channel_check_outage_accepts_with_note(self):
+        self.check_channel.side_effect = TimeoutError
+        code, headers, _ = self.post("/register", name="Ann", email="ann@example.com",
+                                     platform="tiktok", channel="ann1", webhook=HOOK)
+        self.assertEqual(code, 303)
+        body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        self.assertIn("couldn&#x27;t verify", body)
+        self.assertEqual(server.free_used(), 1)
+
+    def test_inconclusive_check_accepts_with_note_then_verified_update_clears_it(self):
+        self.check_channel.return_value = None
+        _, headers, _ = self.post("/register", name="Ann", email="ann@example.com",
+                                  platform="tiktok", channel="ann1", webhook=HOOK)
+        body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        self.assertIn("couldn&#x27;t verify", body)
+        self.check_channel.return_value = True
+        self.post("/register", name="Ann", email="ann@example.com", platform="tiktok", channel="ann1", webhook=HOOK)
+        self.assertEqual(next(iter(server.regs.values()))["channel_note"], "")
+        self.assertEqual(server.free_used(), 1)
+
+    def test_normalised_channels_reach_check_and_registration(self):
+        for platform, raw, expected in (("tiktok", " @Ann.1 ", "@Ann.1"),
+                                         ("tiktok", "https://www.tiktok.com/@Ann.1?lang=en", "@Ann.1"),
+                                         ("twitch", " @SomeOne ", "someone"),
+                                         ("twitch", "https://www.twitch.tv/SomeOne/", "someone")):
+            code, _, _ = self.post("/register", name="Ann", email="ann@example.com",
+                                   platform=platform, channel=raw, webhook=HOOK)
+            self.assertEqual(code, 303, raw)
+            self.check_channel.assert_called_with(platform, expected)
+            self.assertEqual(next(iter(server.regs.values()))["channel"], expected)
+
+    def test_problem_visible_on_manage_and_admin(self):
+        _, headers, _ = self.post("/register", name="Ann", email="ann@example.com",
+                                  platform="tiktok", channel="ann1", webhook=HOOK)
+        token = next(iter(server.regs))
+        server.status[token] = "TikTok: can't find @ann1. Check the spelling or permission to go LIVE; retrying in 30 minutes."
+        body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        for page in (body, server.admin_body()):
+            self.assertIn("Check the spelling or permission to go LIVE", page)
+            self.assertIn("retrying in 30 minutes", page)
+        self.assertIn("This updates your existing registration", body)
 
     def webhook_event(self, event, secret="whsec_test", ts=None):
         body = json.dumps(event).encode()
