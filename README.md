@@ -1,116 +1,43 @@
 # LiveChat XR
 
-See your **Twitch** or **TikTok LIVE** chat while you play PC VR. New comments appear as a short banner near the top of
-your view, pinned to your head so it stays visible however you turn, then fade after a few seconds.
+Read TikTok LIVE or Twitch chat while playing VR. Choose the path that matches where your game runs.
 
-**Gifts and support show too, in gold:** TikTok gifts (a gift combo is shown once, with its final count), Twitch Bits
-cheers, subs, resubs and gifted subs (a mass gift is shown once, not once per sub). Gifts are always listed first in a
-banner, so they never get folded into "+N more".
-
-Comments that arrive close together share one banner ("+N more" when there are lots), so a busy chat can't bury your view.
-Your own messages are skipped.
-
-## Standalone Quest? Use Discord instead (no PC)
-
-Go to **https://livechat.deliciouswines.org**, enter your TikTok or Twitch channel and a Discord webhook URL, and your
-chat gets posted to that Discord channel whenever you're live. With the Discord app on your Quest, comments pop up as
-notifications in-game. The page walks you through making the webhook. You get a private link to send a test or stop it,
-and that link is also posted in your Discord channel.
-
-Usernames can include `@` or a full TikTok/Twitch profile URL. Sign-up checks TikTok profiles, including offline accounts;
-if TikTok is unavailable, sign-up still works with a note on the manage page. Twitch names are checked for valid syntax
-only (its account lookup needs API credentials). Repeated TikTok account-not-found errors retry every 30 minutes after
-five consecutive failures; the manage page and admin dashboard show the problem. Correct a channel by signing up with
-the same Discord webhook to update the existing registration without losing its plan or free spot.
-
-Self-hosting the relay: `docker build -f server/Dockerfile -t livechat-xr-relay .` then
-`docker run -d -p 13300:13300 -v livechat-xr-data:/data -e PUBLIC_URL=https://your.host livechat-xr-relay`.
-
-## How it works
-
-LiveChat XR has two parts:
-
-1. **A tray app** connects to your chat and writes each batch of comments to `%LOCALAPPDATA%\LiveChatXR\banner.txt`.
-2. **An OpenXR API layer** loads into the VR games you choose and draws that text as a head-locked panel on top of the game.
-   It never touches games you haven't listed.
-
-## Requirements
-
-- Windows 10/11, x64
-- A PC VR game that uses **OpenXR with Direct3D 11**. Direct3D 12 and Vulkan games are not supported yet; the layer
-  stays out of their way.
-- Any OpenXR runtime: Meta Quest Link / Air Link, Virtual Desktop (VDXR), SteamVR, and so on.
-
-| Game | Runtime | Status |
+| Path | How it works | Start here |
 |---|---|---|
-| Population: ONE (Meta PC version) | Quest 3 via Virtual Desktop | ✅ Tested |
-| Anything else | | Untested: please [report results](https://github.com/DeliciousHouse/livechat-xr/issues) |
+| **Windows PCVR overlay** | A tray app reads chat; an OpenXR layer draws short, head-locked banners in selected D3D11 games | [Install and first run](docs/user-guide.md#pc-first-run) · [Download installer](https://github.com/DeliciousHouse/livechat-xr/releases) |
+| **Quest standalone via Discord** | The hosted relay posts chat to your Discord channel, with display handled by Discord on Quest; no LiveChat XR PC app | [Quest setup and notification test](docs/user-guide.md#quest-first-run) · [Connect relay](https://livechat.deliciouswines.org/) |
 
-## Install
+**Check compatibility first:** PC requires Windows 10/11 x64, an OpenXR/Direct3D 11 game and administrator rights to install. D3D12 and Vulkan are unsupported. The repo previously recorded the Meta PC version of Population: ONE on Quest 3 via Virtual Desktop as tested; other combinations need testing. Standalone in-game Discord pop-ups and timed five-minute setup remain unverified in newcomer QA. Follow the guide's test checkpoint before relying on chat during a stream.
 
-1. Download `LiveChatXR-Setup-x.y.z.exe` from [Releases](https://github.com/DeliciousHouse/livechat-xr/releases) and run it.
-   The installer needs admin rights because it registers the OpenXR layer machine-wide (some game loaders ignore
-   per-user registration).
-   - The installer isn't code-signed yet, so Windows SmartScreen may warn you. Click **More info → Run anyway**.
-2. On first launch, the settings window opens:
-   - **Platform**: Twitch or TikTok LIVE
-   - **Channel / username**: your Twitch channel or TikTok @handle
-   - **Games**: the game's exe name, e.g. `PopulationONE.exe`. To find it, open Task Manager while the game is running,
-     go to the Details tab, and read the exe name.
-3. Start the game, then use **Send test banner** in the tray menu (or the settings window). You should see it in your headset.
+The PC banner batches comments (seven seconds and three selected lines by default), prioritizes gifts/support in gold, summarizes overflow and skips your own normal comments. It is not a full chat-history viewer. The PC app can optionally also post to Discord; leave that field empty if your hosted relay already feeds the same channel.
 
-Placement (height, distance, width) and the game list are read when the game starts, so restart the game after changing them.
+## First steps
 
-### Optional: Discord (chat on your Quest without the PC overlay)
+- **PC:** download `LiveChatXR-Setup-<version>.exe` from release **Assets**, run it, select platform/handle in Settings, save, start the chosen game and **Send test banner**. The installer is unsigned; verify its source before accepting a Windows warning. Restart the game after placement/game-list changes.
+- **Standalone:** install Discord from Meta Horizon Store, sign in, connect your channel at the hosted relay, then **Send test message** on your private manage page. Verify the actual Discord channel first, then notifications outside and inside the game. No unofficial APK is required.
+- **Hosted pricing:** first five available free registrations, then **$3/month** or **$25/year**. Your manage page confirms whether payment is needed. The PC app has no subscription gate. [Billing and cancellation](docs/user-guide.md#pricing-and-billing) · [Privacy](https://livechat.deliciouswines.org/privacy).
 
-LiveChat XR can also post each chat batch to a Discord channel. The Discord app on your Quest then pops it up as a
-notification, even mid-game, so it works for standalone Quest games too.
+## Documentation
 
-1. In Discord, use a server you own (a private one is fine) and make a channel just for this, e.g. `#stream-chat`.
-2. Channel settings (gear icon) → **Integrations** → **Webhooks** → **New Webhook** → **Copy Webhook URL**.
-3. Paste it into **Discord webhook URL** in LiveChat XR settings and save.
-4. Install Discord on the Quest, sign in, and set that channel's notifications to **All Messages**. Mute your other
-   servers while streaming if you only want chat pop-ups.
-5. **Send test banner**: the same text should land in the channel and pop up on the Quest.
-
-Treat the webhook URL like a password: anyone who has it can post to that channel. Mentions are always disabled, so chat
-text can never ping @everyone or roles. LiveChat XR posts at most once per banner window (7 s by default), well under
-Discord's limit of about 30 posts a minute per channel.
-
-## ⚠️ Anti-cheat
-
-The layer runs inside the game process, as every OpenXR overlay does (OpenKneeboard, OpenXR Toolkit, and others). Some
-anti-cheat systems may object to that. Only add games where third-party OpenXR overlays are allowed. You use it at your
-own risk.
-
-## Troubleshooting
-
-All logs are in `%LOCALAPPDATA%\LiveChatXR\` (tray menu → **Open data folder**).
-
-| Symptom | Check |
+| Document | Use it for |
 |---|---|
-| No banner, `overlay.log` missing or no new line | The game isn't in the Games list (exact exe name), or it isn't an OpenXR game |
-| `overlay.log` says `DISABLED: not a D3D11 session` | The game uses D3D12/Vulkan, which isn't supported yet |
-| `overlay.log` has `session ready` but no banner | Check that the tray status says "connected" and that comments are arriving (`app.log`) |
-| TikTok says retrying / rate limited | TikTok is read through the unofficial [TikTokLive](https://github.com/isaackogan/TikTokLive) library, which uses Euler Stream's sign service. Heavy users can get a free key from [eulerstream.com](https://www.eulerstream.com) and paste it into settings |
+| [User guide and FAQ](docs/user-guide.md) | Illustrated first runs, webhook setup, name correction, billing, cancellation and troubleshooting |
+| [Reference](docs/reference.md) | Settings/defaults, files, commands, environment variables and HTTP interface |
+| [Architecture](docs/architecture.md) | How the PC layer/app and hosted relay share chat, plus limits and trade-offs |
+| [Development](docs/development.md) | Local environment, tests, empty local relay and verification evidence |
+| [Operations](docs/operations.md) | Dora service map, admin/backup diagnosis and canonical release/deploy runbook ownership |
+| [Contributing](CONTRIBUTING.md) | Scoped changes, draft PRs, tests and safe reports |
 
-**Kill switch:** set the environment variable `LIVECHATXR_DISABLE=1`, or uninstall. Uninstalling removes the layer registration.
+## Safety and support
 
-## Build from source
+The PC layer runs inside the game process. Only enable it where third-party OpenXR overlays are allowed; anti-cheat compatibility is not guaranteed. Uninstall removes its machine-wide registration. `LIVECHATXR_DISABLE=1` in the game's environment is the layer kill switch.
 
-Needs Visual Studio 2022 Build Tools (C++), Python 3.12, and Inno Setup 6.
+Webhook URLs, private manage links, keys, config files and backups can grant access or contain private data. Do not post them in support issues. **Stop and delete does not cancel paid billing**; use the Stripe billing portal separately. See [troubleshooting](docs/user-guide.md#troubleshooting) or [report a problem](https://github.com/DeliciousHouse/livechat-xr/issues) with sanitized steps and your platform/version.
 
-```bat
-layer\build.cmd
-python -m venv .venv && .venv\Scripts\pip install -r app\requirements.txt pyinstaller
-.venv\Scripts\python -m unittest discover -s tests -v
-.venv\Scripts\pyinstaller --noconfirm --windowed --name LiveChatXR --collect-all TikTokLive --collect-all TikTokLiveProto --collect-submodules EulerApiSdk --paths app app\livechat_xr.py
-"%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\livechat-xr.iss
-```
-
-CI builds the installer on every push, and pushing a `v*` tag publishes a GitHub release.
+For isolated relay simulation and visible Windows Settings without touching the installed profile,
+see [QA fixtures](docs/qa-fixtures.md). CI also uploads `LiveChatXR-Portable` for alternate-data testing
+without running an installer.
 
 ## License
 
-MIT for LiveChat XR's code. Bundled components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-Not affiliated with TikTok, Twitch, Meta, or the Khronos Group.
+MIT for LiveChat XR's code. Bundled components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Not affiliated with TikTok, Twitch, Meta or the Khronos Group.

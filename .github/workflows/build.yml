@@ -7,11 +7,27 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
+  relay-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Linux deployment guards and loopback probe
+        run: python -m unittest discover -s tests -p test_deploy.py -v
+
   build:
+    name: windows-build
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -24,6 +40,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
 
       - name: Install dependencies
         run: pip install -r app/requirements.txt pyinstaller==6.*
@@ -43,23 +61,70 @@ jobs:
           $p = Start-Process dist\LiveChatXR\LiveChatXR.exe -ArgumentList '--check' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "packaged app failed --check ($($p.ExitCode))" }
 
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LiveChatXR-Portable
+          path: dist/LiveChatXR/
+
       - name: Build installer
         shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $v = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0-dev.${{ github.run_number }}" }
-          choco install innosetup --no-progress -y | Out-Null
+          if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') { throw 'Invalid version tag' }
+          $v = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME.Substring(1) } else { "0.0.0-dev.${{ github.run_number }}" }
+          if (!(Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y | Out-Null
+            if ($LASTEXITCODE) { throw 'Inno Setup install failed' }
+          }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$v installer\livechat-xr.iss
           if ($LASTEXITCODE) { throw "ISCC failed" }
+          $files = @(Get-ChildItem dist/LiveChatXR-Setup-*.exe)
+          if ($files.Count -ne 1 -or $files[0].Length -eq 0) { throw 'Expected one nonempty installer' }
+          $hash = (Get-FileHash $files[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($files[0].Name)" | Set-Content dist/SHA256SUMS -Encoding ascii
 
       - uses: actions/upload-artifact@v5
         with:
           name: LiveChatXR-Setup
-          path: dist/LiveChatXR-Setup-*.exe
+          path: |
+            dist/LiveChatXR-Setup-*.exe
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+  full-suite:
+    if: always()
+    needs: [build, relay-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test and packaging lane
+        env:
+          WINDOWS: ${{ needs.build.result }}
+          RELAY: ${{ needs.relay-tests.result }}
+        run: test "$WINDOWS" = success && test "$RELAY" = success
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [build, full-suite]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
         with:
-          files: dist/LiveChatXR-Setup-*.exe
+          name: LiveChatXR-Setup
+          path: dist
+      - name: Verify installer checksum
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/LiveChatXR-Setup-*.exe
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') || contains(github.ref_name, '+') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || contains(github.ref_name, '+') && 'false' || 'true' }}
