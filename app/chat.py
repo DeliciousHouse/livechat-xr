@@ -140,9 +140,11 @@ def _who(u) -> tuple[str, str]:
 
 async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
     from TikTokLive import TikTokLiveClient
+    from TikTokLive.client.errors import UserNotFoundError
     from TikTokLive.events import CommentEvent, ConnectEvent, GiftEvent
 
     user = user.lstrip("@")
+    missing = 0
     if sign_api_key:
         os.environ["SIGN_API_KEY"] = sign_api_key  # read by TikTokLive's signer
     while True:
@@ -150,6 +152,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
 
         @client.on(ConnectEvent)
         async def _(e: ConnectEvent):
+            nonlocal missing
+            missing = 0
             status(f"TikTok: connected to @{user}")
 
         @client.on(CommentEvent)
@@ -165,19 +169,27 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
             n = e.repeat_count or 1
             emit(f"{GIFT}{_who(e.user)[1]} sent {e.gift.name}" + (f" x{n}" if n > 1 else ""))
 
+        retry = 60
         try:
             await client.connect(process_connect_events=False)  # returns when the stream ends
+            missing = 0
             status(f"TikTok: @{user} went offline, waiting")
         except asyncio.CancelledError:
             if client.connected:
                 await client.disconnect()
             raise
         except Exception as e:
+            missing = missing + 1 if isinstance(e, UserNotFoundError) else 0
+            if missing:
+                retry = 1800 if missing >= 5 else 60
+                status(f"TikTok: can't find @{user}. Check the spelling or permission to go LIVE; "
+                       f"retrying in {'30 minutes' if retry == 1800 else '1 minute'}.")
             offline = "offline" in type(e).__name__.lower()
-            status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({type(e).__name__})")
+            if not missing:
+                status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({type(e).__name__})")
             if not offline:
                 log.warning("tiktok: %r", e)
-        await asyncio.sleep(60)
+        await asyncio.sleep(retry)
 
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window

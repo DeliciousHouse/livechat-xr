@@ -17,6 +17,12 @@ chat gets posted to that Discord channel whenever you're live. With the Discord 
 notifications in-game. The page walks you through making the webhook. You get a private link to send a test or stop it,
 and that link is also posted in your Discord channel.
 
+Usernames can include `@` or a full TikTok/Twitch profile URL. Sign-up checks TikTok profiles, including offline accounts;
+if TikTok is unavailable, sign-up still works with a note on the manage page. Twitch names are checked for valid syntax
+only (its account lookup needs API credentials). Repeated TikTok account-not-found errors retry every 30 minutes after
+five consecutive failures; the manage page and admin dashboard show the problem. Correct a channel by signing up with
+the same Discord webhook to update the existing registration without losing its plan or free spot.
+
 Self-hosting the relay: `docker build -f server/Dockerfile -t livechat-xr-relay .` then
 `docker run -d -p 13300:13300 -v livechat-xr-data:/data -e PUBLIC_URL=https://your.host livechat-xr-relay`.
 
