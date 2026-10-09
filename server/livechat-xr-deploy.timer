@@ -1,0 +1,11 @@
+[Unit]
+Description=Check LiveChat XR main for a tested relay revision
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+RandomizedDelaySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target

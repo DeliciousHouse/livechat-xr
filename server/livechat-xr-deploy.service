@@ -1,0 +1,10 @@
+[Unit]
+Description=LiveChat XR reviewed-main pull deployment
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/lib/livechat-xr-deploy/deploy.py
+TimeoutStartSec=30min
+UMask=0077
+NoNewPrivileges=true
