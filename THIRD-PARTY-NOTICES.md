@@ -14,6 +14,7 @@ LiveChat XR's own code is MIT-licensed (see `LICENSE`). The installer also ships
 | mashumaro, python-socks, async-timeout | Apache-2.0 | |
 | certifi | MPL-2.0 | |
 | CPython runtime (bundled by PyInstaller) | PSF-2.0 | |
+| [Pretext](https://github.com/chenglou/pretext) | MIT | Relay server only: vendored in `server/pretext.js`, served to the sign-up page |
 
 TikTok and Twitch are trademarks of their owners. LiveChat XR is not affiliated with either. TikTok chat is read
 through an unofficial library and can break when TikTok changes its site.

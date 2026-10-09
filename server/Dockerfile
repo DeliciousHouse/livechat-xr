@@ -2,7 +2,7 @@
 FROM python:3.12-slim
 WORKDIR /srv
 RUN pip install --no-cache-dir TikTokLive==7.0.1
-COPY app/chat.py server/server.py ./
+COPY app/chat.py server/server.py server/pretext.js ./
 RUN mkdir /data && chown nobody /data
 ENV DATA_DIR=/data PORT=13300
 VOLUME /data

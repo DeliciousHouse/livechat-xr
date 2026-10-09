@@ -228,36 +228,153 @@ def stop(token: str) -> None:
 
 
 # ---------------------------------------------------------------- web
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>LiveChat XR for Discord</title>
-<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;background:#16131f;color:#eee}}
-h1{{font-size:24px}}label{{display:block;margin:14px 0 4px}}input,select{{width:100%;padding:9px;font:inherit;border-radius:6px;
-border:1px solid #555;background:#221d30;color:#eee;box-sizing:border-box}}button{{margin-top:16px;padding:10px 18px;font:inherit;
-border:0;border-radius:6px;background:#7c4dff;color:#fff;cursor:pointer}}button.alt{{background:#444}}a{{color:#b39dff}}
-.box{{background:#221d30;border-radius:8px;padding:14px 16px;margin:16px 0}}.err{{background:#5a1f2a}}small{{color:#aaa}}
-form.inline{{display:inline}}.gsi{{margin:18px 0 6px;min-height:44px}}</style>{head}</head><body>{body}</body></html>"""
+# Look: DESIGN.md (approved relay sign-up design). CSS is passed in as a value, so it needs no doubled braces.
+CSS = """
+:root{--bg:#0f0d16;--surface:#17141f;--chip:#1b1826;--line:#2a2536;--line-field:#332d42;--text:#eceaf4;--text-2:#c9c5d8;
+--muted:#a9a5bc;--label:#9a96ad;--faint:#6f6a84;--placeholder:#5f5a72;--primary:#7c4dff;--focus:#8b5cf6;--link:#b39dff;
+--accent:#ffc440;--accent-soft:#ffd77a;--error:#5a1f2a;--font:"Bricolage Grotesque",system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;font:400 16px/1.55 var(--font);background:var(--bg);color:var(--text)}
+a{color:var(--link)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:6px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.site{display:flex;justify-content:space-between;align-items:center;max-width:1080px;margin:0 auto;padding:22px 24px;font-size:15px}
+.brand{font-weight:800;color:var(--text);text-decoration:none}
+.site nav a{color:var(--label);text-decoration:none;margin-left:18px}
+main{max-width:600px;margin:0 auto;padding:20px 20px 60px}
+h1{font-size:32px;line-height:36px;font-weight:800;margin:0 0 14px}
+h2{font-size:19px;line-height:24px;font-weight:800;margin:6px 0 12px}
+small,.hint{font-size:13px;color:var(--label)}
+code{font-size:.9em}
+.box{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:16px 0;text-align:left}
+.box.err{background:var(--error);border-color:#7a2a38}
+.hero{text-align:center;padding-top:10px}
+.hero h1{font-size:52px;line-height:52px}
+.hero h1 em{font-style:normal;color:var(--accent)}
+.sub{color:var(--muted);font-size:18px;line-height:28px;margin:0 0 20px}
+.qn{margin:4px auto 0;max-width:360px;display:flex;gap:12px;text-align:left;padding:12px 14px;border-radius:16px;background:#2b2d33;
+color:#f2f2f2;font:400 14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;box-shadow:0 8px 24px #0006}
+.qn .ic{width:36px;height:36px;border-radius:10px;background:#5865f2;flex:none;display:grid;place-items:center}
+.qn .hd{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#b5b7bd}
+.qn .hd b{color:#f2f2f2;font-weight:600}
+.qn .ti{font-weight:600;margin:1px 0 2px}
+.qn .bd{color:#d9dadd;white-space:pre-line}
+.cap{margin:8px 0 18px;font-size:13px;line-height:20px;color:var(--faint)}
+.chip{display:inline-block;padding:6px 14px;border-radius:999px;background:var(--chip);border:1px solid #ffc44055;color:var(--accent-soft);font-size:14px;font-weight:600}
+.card{margin-top:28px;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:30px}
+.step{display:grid;grid-template-columns:38px 1fr;gap:16px;padding-bottom:26px;position:relative}
+.step:last-child{padding-bottom:0}
+.step:not(:last-child)::before{content:"";position:absolute;left:18px;top:42px;bottom:4px;width:2px;background:var(--line)}
+.n{width:38px;height:38px;border-radius:12px;background:var(--accent);color:#1a1300;display:grid;place-items:center;font-weight:800;font-size:17px}
+.step.later .n{background:var(--line);color:var(--accent)}
+.step p{margin:0;color:var(--text-2)}
+fieldset{border:0;margin:0;padding:0;min-width:0}
+label{display:block;font-size:13px;font-weight:600;color:var(--label);margin:12px 0 6px}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--bg);border:1px solid var(--line-field);border-radius:12px;padding:4px}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg label{margin:0;padding:10px;border-radius:9px;text-align:center;font-size:15px;font-weight:700;color:var(--label);cursor:pointer}
+.seg input:checked+label{background:var(--text);color:var(--surface)}
+.seg input:focus-visible+label{outline:3px solid var(--focus);outline-offset:1px}
+input[type=text],input[type=email],input[type=url],input:not([type]){width:100%;padding:12px 14px;font:inherit;color:var(--text);
+border:1px solid var(--line-field);border-radius:12px;background:var(--bg)}
+input::placeholder{color:var(--placeholder)}
+input:focus{outline:3px solid #8b5cf655;border-color:var(--focus)}
+input[readonly]{color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.gsi{margin:12px 0 4px;min-height:44px}
+button{padding:12px 18px;border:0;border-radius:14px;background:var(--primary);color:#fff;font:800 16px/1.2 var(--font);cursor:pointer;
+transition:filter .12s ease,transform .12s ease}
+button:hover{filter:brightness(1.08)}button:active{transform:translateY(1px)}
+button.alt{background:var(--line)}
+.cta{width:100%;padding:16px;font-size:18px;box-shadow:0 10px 30px -10px #7c4dffaa}
+.cta.alt{margin-top:10px;font-size:16px;box-shadow:none}
+details{margin-top:10px}
+summary{cursor:pointer;font-size:14px;color:var(--label);text-decoration:underline;text-underline-offset:3px}
+details ol{margin:8px 0 0;padding-left:20px;color:var(--text-2);font-size:14px}
+form.inline{display:inline}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0}
+footer{margin-top:26px;font-size:13px;line-height:20px;color:var(--faint);text-align:center}
+footer a{color:var(--label)}
+@media (min-width:769px){.hero h1{margin-left:-40px;margin-right:-40px}}
+@media (max-width:768px){.hero h1{font-size:44px;line-height:46px}}
+@media (max-width:600px){.hero h1{font-size:36px;line-height:39px}.sub{font-size:16px;line-height:25px}.two{grid-template-columns:1fr}.card{padding:22px}}
+@media (max-width:375px){main{padding-left:14px;padding-right:14px}.card{padding:18px}.step{grid-template-columns:32px 1fr;gap:12px}
+.n{width:32px;height:32px;font-size:15px}.step:not(:last-child)::before{left:15px;top:36px}.site nav a{margin-left:12px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+"""
 
-HOME = """<h1>LiveChat XR for Discord</h1>
-<p>Your TikTok LIVE or Twitch chat, posted to a Discord channel while you stream. With the Discord app on your
-Quest, comments pop up in-game, no PC needed.</p>
+PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
+<title>LiveChat XR for Discord</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>{css}</style>{head}</head><body>
+<header class="site"><a class="brand" href="/">LiveChat XR</a>
+<nav aria-label="Site"><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a></nav></header>
+<main>{body}</main></body></html>"""
+
+DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>')
+
+# The Quest shows a stock Meta notification from the Discord app (no custom styling); the body is one chat.batch().
+HOME = """<div class="hero">
+<h1 data-pretext>Stream chat on your Quest, <em>through Discord.</em></h1>
+<p class="sub" data-pretext>TikTok LIVE or Twitch. No PC, nothing to install on the headset.</p>
+<figure style="margin:0"><div class="qn" role="img" aria-label="Example Quest notification from Discord in #stream-chat: Sam sent Rose x10, BigFan: nice shot!, Mike: GG, plus 2 more">
+<div class="ic" aria-hidden="true">{icon}</div><div aria-hidden="true"><div class="hd"><b>Discord</b><span>now</span></div>
+<div class="ti">#stream-chat · LiveChat XR</div><div class="bd">🎁 Sam sent Rose x10
+BigFan: nice shot!
+Mike: GG
++2 more</div></div></div>
+<figcaption class="cap" data-pretext>What you see in the headset: a normal Quest notification, mid-game.</figcaption></figure>
+<span class="chip">First spots free · then $3/month</span></div>
 {msg}
-<form method="post" action="/register">
-{google}<label for="name">Your name</label><input id="name" name="name" value="{name}" required maxlength="60">
-<label for="email">Email</label><input id="email" name="email" type="email" value="{email}" required maxlength="200">
-<label for="platform">Platform</label><select id="platform" name="platform"><option value="tiktok"{tiktok}>TikTok LIVE</option><option value="twitch"{twitch}>Twitch</option></select>
-<label for="channel">Channel / username</label><input id="channel" name="channel" value="{channel}" placeholder="@yourhandle or profile URL" required maxlength="200">
-<small>Enter your username or full profile URL; the @ is optional.</small>
-{discord}</form>
-<div class="box">{manual_help}
+<form class="card" method="post" action="/register" aria-label="Set up LiveChat XR for Discord">
+<section class="step" aria-labelledby="s1"><div class="n" aria-hidden="true">1</div><div><h2 id="s1">Your channel</h2>
+<fieldset><legend class="sr-only">Platform</legend><div class="seg">
+<input type="radio" name="platform" id="p-tiktok" value="tiktok"{tiktok}><label for="p-tiktok">TikTok LIVE</label>
+<input type="radio" name="platform" id="p-twitch" value="twitch"{twitch}><label for="p-twitch">Twitch</label></div></fieldset>
+<label for="channel">Channel</label><input type="text" id="channel" name="channel" value="{channel}" placeholder="@yourhandle or profile URL"
+required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+<div class="hint">Your username or full profile URL; the @ is optional.</div>
+{google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
+<div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
+</div></section>
+<section class="step" aria-labelledby="s2"><div class="n" aria-hidden="true">2</div><div><h2 id="s2">Connect Discord</h2>
+{discord}{manual_help}
 <li>In Discord, open a server you own (a new private one is fine) and make a channel like <code>#stream-chat</code>.</li>
 <li>Channel settings (gear) → <b>Integrations</b> → <b>Webhooks</b> → <b>New Webhook</b> → <b>Copy Webhook URL</b>.</li>
 <li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>
-<b>On your Quest:</b> install Discord, sign in, open that channel → notification settings → <b>All Messages</b>.
-Mute your other servers while streaming if you only want chat pop-ups.</div>
-<p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.{ga_note}
-Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
-Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a> ·
-<a href="/privacy">Privacy</a></small></p>"""
+</div></section>
+<section class="step later" aria-labelledby="s3"><div class="n" aria-hidden="true">3</div><div><h2 id="s3">On your Quest</h2>
+<p data-pretext>Install Discord, open the channel, set notifications to <b>All Messages</b>.</p></div></section>
+</form>
+<footer>Your name and email are only used to know who is using it.{ga_note} Your webhook URL is only used to post your chat.
+Mentions are disabled, so chat can't ping anyone.<br><a href="https://github.com/DeliciousHouse/livechat-xr">Open source on GitHub</a> ·
+<a href="/privacy">Privacy</a></footer>"""
+
+# Resize-aware heights for the hero text (Pretext, MIT, served from /pretext.js). If it fails to load, plain CSS layout stands.
+PRETEXT_JS = """<script type="module">
+import { prepare, layout } from "/pretext.js";
+await document.fonts.ready;
+const els = [...document.querySelectorAll("[data-pretext]")], prepared = new Map();
+const prep = el => prepared.set(el, prepare(el.textContent, getComputedStyle(el).font));
+function relayout() {
+  for (const [el, handle] of prepared) {
+    el.style.height = "";
+    const cs = getComputedStyle(el);
+    el.style.height = layout(handle, el.clientWidth, parseFloat(cs.lineHeight)).height + "px";
+  }
+}
+els.forEach(prep);
+for (const q of ["(max-width:375px)", "(max-width:600px)", "(max-width:768px)"])
+  matchMedia(q).addEventListener("change", () => { els.forEach(prep); relayout(); });
+new ResizeObserver(relayout).observe(document.querySelector("main"));
+relayout();
+</script>"""
+try:
+    PRETEXT = (Path(__file__).with_name("pretext.js")).read_bytes()
+except OSError:
+    PRETEXT = b""
 
 PRIVACY = """<h1>Privacy</h1>
 <p>LiveChat XR for Discord posts your TikTok LIVE or Twitch chat into a Discord channel you choose. This is everything it keeps.</p>
@@ -270,51 +387,53 @@ PRIVACY = """<h1>Privacy</h1>
 <div class="box"><b>What we don't do</b><ul><li>We don't sell or share your details. They are only used to run the relay and to
 know who is using it.</li><li>We don't post anywhere except the Discord channel you connected.</li></ul></div>
 <div class="box"><b>Analytics</b><br>{ga}</div>
+<div class="box"><b>Fonts</b><br>The page font is loaded from Google Fonts, so your browser fetches it from Google's servers.</div>
 <div class="box"><b>Deleting your data</b><br>Use <b>Stop and delete</b> on your private manage page (the link is also
 posted in your Discord channel). That removes your registration right away. Backup copies roll off within 90 days.
 Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
 <p><a href="/">Back</a></p>"""
 
-MANAGE = """<h1>LiveChat XR for Discord</h1>{msg}
+MANAGE = """<h1>Your chat relay</h1>{msg}
 <div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
 <p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
 whenever you go live.</p>
-<form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form>
+<div class="actions"><form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form>
 <form class="inline" method="post" action="/m/{token}/delete" onsubmit="return confirm('Stop posting chat to Discord?')">
-<button class="alt">Stop and delete</button></form>
+<button class="alt">Stop and delete</button></form></div>
 <p><a href="/">Set up another channel</a></p>"""
 
 
-WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input id="webhook" name="webhook" placeholder="https://discord.com/api/webhooks/…" '
-                 'value="{webhook}" maxlength="200"{req}>')
+WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input type="url" id="webhook" name="webhook" '
+                 'placeholder="https://discord.com/api/webhooks/…" value="{webhook}" maxlength="200"{req}>')
 
 
 def home(msg: str = "", form: dict | None = None) -> bytes:
     form = form or {}
     values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "channel", "webhook")}
     if DISCORD_ID:
-        discord = ('<button name="via" value="discord">Connect Discord</button><p><small>Discord asks which server and channel '
-                   'to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</small></p>'
-                   '<details><summary><small>Or paste a webhook URL instead</small></summary>'
-                   + WEBHOOK_FIELD.format(req="", webhook=values["webhook"]) + '<button name="via" value="webhook">Connect with webhook</button></details>')
-        manual = '<details><summary><b>Getting a webhook URL by hand</b></summary><ol>'
+        discord = ('<button class="cta" name="via" value="discord">Connect Discord</button><p class="hint">Discord asks which server '
+                   'and channel to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</p>'
+                   '<details><summary>or paste a webhook URL</summary>'
+                   + WEBHOOK_FIELD.format(req="", webhook=values["webhook"])
+                   + '<button class="cta alt" name="via" value="webhook">Connect with webhook</button></details>')
+        manual = '<details><summary>Getting a webhook URL by hand</summary><ol>'
     else:
-        discord = WEBHOOK_FIELD.format(req=" required", webhook=values["webhook"]) + '<button>Connect</button>'
-        manual = '<details open><summary><b>Getting a webhook URL (1 minute)</b></summary><ol>'
+        discord = WEBHOOK_FIELD.format(req=" required", webhook=values["webhook"]) + '<button class="cta" style="margin-top:14px">Connect</button>'
+        manual = '<details open><summary>Getting a webhook URL (1 minute)</summary><ol>'
     google = ""
     if GOOGLE_ID:  # Google Identity Services: the ID token rides along in the form and is verified in register()
         google = (f'<script src="https://accounts.google.com/gsi/client" async></script><div id="g_id_onload" '
                   f'data-client_id="{html.escape(GOOGLE_ID)}" data-callback="gsi" data-auto_prompt="false"></div>'
                   '<div class="gsi"><div class="g_id_signin" data-type="standard" data-theme="filled_black" data-shape="pill" '
                   'data-text="continue_with"></div></div><input type="hidden" name="google" id="gcred">'
-                  '<p id="gwho"><small>Or type your name and email:</small></p><script>function gsi(r){'
+                  '<p id="gwho" class="hint">Or type your name and email:</p><script>function gsi(r){'
                   'var p=JSON.parse(decodeURIComponent(escape(atob(r.credential.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")))));'
                   'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
-                  'gwho.innerHTML="<small>Signed in with Google \u2714</small>"}</script>')
+                  'gwho.textContent="Signed in with Google ✔"}</script>')
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
-    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note,
-                            tiktok=" selected" if form.get("platform") != "twitch" else "",
-                            twitch=" selected" if form.get("platform") == "twitch" else "", **values), ga="/")
+    twitch = form.get("platform") == "twitch"
+    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note, icon=DISCORD_ICON,
+                            tiktok="" if twitch else " checked", twitch=" checked" if twitch else "", **values) + PRETEXT_JS, ga="/")
 
 
 def google_identity(credential: str) -> tuple[str, str]:
@@ -347,7 +466,7 @@ def page(body: str, ga: str = "", event: str = "") -> bytes:
                 "window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());"
                 f"gtag('config','{gid}',{{page_location:location.origin+'{ga}',page_referrer:document.referrer.split('?')[0]}});"
                 f"{event}</script>")
-    return PAGE.format(body=body, head=head).encode()
+    return PAGE.format(css=CSS, body=body, head=head).encode()
 
 
 def note(text: str, err: bool = False) -> str:
@@ -398,7 +517,7 @@ def admin_body() -> str:
                    f"<td><small>{e(name)}: {e(msg)}</small></td></tr>"
                    for ts, lvl, name, msg in reversed(logbuf) if name not in ("httpx", "httpcore"))
     warn = sum(lvl in ("WARNING", "ERROR", "CRITICAL") for _, lvl, _, _ in logbuf)
-    return ('<meta http-equiv="refresh" content="30"><style>body{max-width:1100px}td{vertical-align:top;border-top:1px solid #333}'
+    return ('<meta http-equiv="refresh" content="30"><style>main{max-width:1100px}td{vertical-align:top;border-top:1px solid #333}'
             'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
             f'<div class="box">{len(regs)} sign-ups: {free_used()}/{FREE_SLOTS} free, {paid} paid, '
             f'{sum(plan(r) == "pending" for r in regs.values())} waiting for payment. {live} live right now. '
@@ -411,11 +530,13 @@ def admin_body() -> str:
 class Handler(BaseHTTPRequestHandler):
     server_version = "LiveChatXR"
 
-    def send(self, code: int, body: bytes, location: str = "") -> None:
+    def send(self, code: int, body: bytes, location: str = "", ctype: str = "text/html; charset=utf-8") -> None:
         self.send_response(code)
         if location:
             self.send_header("Location", location)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", ctype)
+        if ctype.startswith("text/javascript"):
+            self.send_header("Cache-Control", "public, max-age=86400")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Referrer-Policy", "no-referrer")  # manage links carry the token
         self.end_headers()
@@ -471,6 +592,8 @@ class Handler(BaseHTTPRequestHandler):
             ga = ("Visits to these pages are counted with Google Analytics (pages viewed, rough location, device type)."
                   if GA_ID else "None.")
             return self.send(200, page(PRIVACY.format(ga=ga), ga="/privacy"))
+        if path == "/pretext.js" and PRETEXT:
+            return self.send(200, PRETEXT, ctype="text/javascript; charset=utf-8")
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):

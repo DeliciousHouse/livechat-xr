@@ -166,7 +166,7 @@ class Server(unittest.TestCase):
         self.assertIn('value="ann@example.com"', body)
         self.assertIn('value="missing"', body)
         self.assertIn(f'value="{HOOK}"', body)
-        self.assertIn('value="twitch" selected', body)
+        self.assertIn('value="twitch" checked', body)
         self.assertEqual((server.regs, self.posts, self.started), ({}, [], []))
 
     def test_tiktok_missing_error_before_discord_oauth(self):
@@ -342,6 +342,15 @@ class Server(unittest.TestCase):
         body = urllib.request.urlopen(self.base + "/privacy").read().decode()
         self.assertIn("Stop and delete", body)
         self.assertIn('href="/privacy"', urllib.request.urlopen(self.base + "/").read().decode())
+
+    def test_home_assets(self):
+        home = urllib.request.urlopen(self.base + "/").read().decode()
+        self.assertIn('import { prepare, layout } from "/pretext.js"', home)
+        self.assertIn('value="tiktok" checked', home)  # TikTok is the default platform
+        r = urllib.request.urlopen(self.base + "/pretext.js")
+        self.assertTrue(r.headers["Content-Type"].startswith("text/javascript"))
+        self.assertIn(b"as prepare", r.read())
+        self.assertNotIn("pretext", urllib.request.urlopen(self.base + "/privacy").read().decode())  # only the home page loads it
 
     def test_cap(self):
         server.MAX_REGS = 1
