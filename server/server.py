@@ -44,6 +44,8 @@ DISCORD_ID = os.environ.get("DISCORD_CLIENT_ID", "")  # one-click "Connect Disco
 DISCORD_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
+GA_ID = os.environ.get("GA_ID", "")  # Google Analytics 4 measurement ID (G-...); unset = no analytics
+GOOGLE_ID = os.environ.get("GOOGLE_CLIENT_ID", "")  # optional "Continue with Google" fills in a verified name + email
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$")}
@@ -194,15 +196,15 @@ h1{{font-size:24px}}label{{display:block;margin:14px 0 4px}}input,select{{width:
 border:1px solid #555;background:#221d30;color:#eee;box-sizing:border-box}}button{{margin-top:16px;padding:10px 18px;font:inherit;
 border:0;border-radius:6px;background:#7c4dff;color:#fff;cursor:pointer}}button.alt{{background:#444}}a{{color:#b39dff}}
 .box{{background:#221d30;border-radius:8px;padding:14px 16px;margin:16px 0}}.err{{background:#5a1f2a}}small{{color:#aaa}}
-form.inline{{display:inline}}</style></head><body>{body}</body></html>"""
+form.inline{{display:inline}}.gsi{{margin:18px 0 6px;min-height:44px}}</style>{head}</head><body>{body}</body></html>"""
 
 HOME = """<h1>LiveChat XR for Discord</h1>
 <p>Your TikTok LIVE or Twitch chat, posted to a Discord channel while you stream. With the Discord app on your
 Quest, comments pop up in-game, no PC needed.</p>
 {msg}
 <form method="post" action="/register">
-<label>Your name</label><input name="name" required maxlength="60">
-<label>Email</label><input name="email" type="email" required maxlength="200">
+{google}<label>Your name</label><input id="name" name="name" required maxlength="60">
+<label>Email</label><input id="email" name="email" type="email" required maxlength="200">
 <label>Platform</label><select name="platform"><option value="tiktok">TikTok LIVE</option><option value="twitch">Twitch</option></select>
 <label>Channel / username</label><input name="channel" placeholder="@yourhandle" required maxlength="30">
 {discord}</form>
@@ -212,9 +214,26 @@ Quest, comments pop up in-game, no PC needed.</p>
 <li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>
 <b>On your Quest:</b> install Discord, sign in, open that channel → notification settings → <b>All Messages</b>.
 Mute your other servers while streaming if you only want chat pop-ups.</div>
-<p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.
+<p><small>The first few spots are free, then $3/month. Your name and email are only used to know who is using it.{ga_note}
 Your webhook URL is only used to post your chat. Mentions are disabled, so chat can't ping anyone.
-Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a></small></p>"""
+Open source: <a href="https://github.com/DeliciousHouse/livechat-xr">github.com/DeliciousHouse/livechat-xr</a> ·
+<a href="/privacy">Privacy</a></small></p>"""
+
+PRIVACY = """<h1>Privacy</h1>
+<p>LiveChat XR for Discord posts your TikTok LIVE or Twitch chat into a Discord channel you choose. This is everything it keeps.</p>
+<div class="box"><b>What we store</b><ul>
+<li>Your name and email: typed in, or taken from your Google account if you use Continue with Google
+(only your name and email address; nothing else from Google).</li>
+<li>Your TikTok or Twitch channel name and the Discord webhook for your channel.</li>
+<li>Counts of messages posted and failed, for troubleshooting. Chat messages are passed straight to Discord, not stored.</li>
+<li>If you pay, Stripe handles the payment; we only keep the subscription ID.</li></ul></div>
+<div class="box"><b>What we don't do</b><ul><li>We don't sell or share your details. They are only used to run the relay and to
+know who is using it.</li><li>We don't post anywhere except the Discord channel you connected.</li></ul></div>
+<div class="box"><b>Analytics</b><br>{ga}</div>
+<div class="box"><b>Deleting your data</b><br>Use <b>Stop and delete</b> on your private manage page (the link is also
+posted in your Discord channel). That removes your registration right away. Backup copies roll off within 90 days.
+Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
+<p><a href="/">Back</a></p>"""
 
 MANAGE = """<h1>LiveChat XR for Discord</h1>{msg}
 <div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
@@ -240,7 +259,29 @@ def home(msg: str = "") -> bytes:
     else:
         discord = WEBHOOK_FIELD.format(req=" required") + '<button>Connect</button>'
         manual = '<details open><summary><b>Getting a webhook URL (1 minute)</b></summary><ol>'
-    return page(HOME.format(msg=msg, discord=discord, manual_help=manual))
+    google = ""
+    if GOOGLE_ID:  # Google Identity Services: the ID token rides along in the form and is verified in register()
+        google = (f'<script src="https://accounts.google.com/gsi/client" async></script><div id="g_id_onload" '
+                  f'data-client_id="{html.escape(GOOGLE_ID)}" data-callback="gsi" data-auto_prompt="false"></div>'
+                  '<div class="gsi"><div class="g_id_signin" data-type="standard" data-theme="filled_black" data-shape="pill" '
+                  'data-text="continue_with"></div></div><input type="hidden" name="google" id="gcred">'
+                  '<p id="gwho"><small>Or type your name and email:</small></p><script>function gsi(r){'
+                  'var p=JSON.parse(decodeURIComponent(escape(atob(r.credential.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")))));'
+                  'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
+                  'gwho.innerHTML="<small>Signed in with Google \u2714</small>"}</script>')
+    ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
+    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note), ga="/")
+
+
+def google_identity(credential: str) -> tuple[str, str]:
+    """Verify a Google ID token with Google's tokeninfo endpoint; returns (name, email). Raises if it doesn't check out."""
+    url = "https://oauth2.googleapis.com/tokeninfo?" + urllib.parse.urlencode({"id_token": credential})
+    with urllib.request.urlopen(url, timeout=10) as r:
+        t = json.load(r)
+    if (t.get("aud") != GOOGLE_ID or t.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
+            or t.get("email_verified") not in ("true", True) or int(t.get("exp", 0)) < time.time()):
+        raise ValueError("Google token rejected")
+    return (t.get("name") or t["email"])[:60], t["email"].lower()
 
 
 def discord_exchange(code: str) -> str:
@@ -253,8 +294,16 @@ def discord_exchange(code: str) -> str:
         return json.load(r)["webhook"]["url"]
 
 
-def page(body: str) -> bytes:
-    return PAGE.format(body=body).encode()
+def page(body: str, ga: str = "", event: str = "") -> bytes:
+    """ga: the path Google Analytics reports for this page (never the real URL, which can carry a manage token)."""
+    head = ""
+    if GA_ID and ga:
+        gid = html.escape(GA_ID)
+        head = (f'<script async src="https://www.googletagmanager.com/gtag/js?id={gid}"></script><script>'
+                "window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());"
+                f"gtag('config','{gid}',{{page_location:location.origin+'{ga}',page_referrer:document.referrer.split('?')[0]}});"
+                f"{event}</script>")
+    return PAGE.format(body=body, head=head).encode()
 
 
 def note(text: str, err: bool = False) -> str:
@@ -292,7 +341,8 @@ def admin_body() -> str:
     rows = []
     for t, r in sorted(regs.items(), key=lambda kv: -kv[1]["created"]):
         st = stats.get(t, {})
-        rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}</small></td>"
+        g = " (Google)" if r.get("signin") == "google" else ""
+        rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}{g}</small></td>"
                     f"<td>{e(r['platform'])} {e(r['channel'])}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
                     f"<td>{plan(r)}</td><td>{e(status.get(t, 'stopped' if plan(r) == 'pending' else ''))}</td>"
                     f"<td>{st.get('posts', 0)}<br><small>{ago(st.get('last_post', 0))}</small></td>"
@@ -327,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def manage(self, token: str, msg: str = "") -> None:
+    def manage(self, token: str, msg: str = "", new: str = "") -> None:
         r = regs.get(token)
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
@@ -344,7 +394,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, page(MANAGE.format(
             msg=msg, token=token, platform="TikTok" if r["platform"] == "tiktok" else "Twitch",
             channel=html.escape(r["channel"]), dname=html.escape(r["discord_channel"]),
-            status=html.escape(st), billing=billing)))
+            status=html.escape(st), billing=billing),
+            ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else ""))
 
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -368,17 +419,21 @@ class Handler(BaseHTTPRequestHandler):
                 log.warning("discord oauth: %r", e)
                 return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True)))
             return self.register({**entry[1], "webhook": webhook, "via": "webhook"})
+        if path == "/privacy":
+            ga = ("Visits to these pages are counted with Google Analytics (pages viewed, rough location, device type)."
+                  if GA_ID else "None.")
+            return self.send(200, page(PRIVACY.format(ga=ga), ga="/privacy"))
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
-            return self.manage(m[1])
+            return self.manage(m[1], new=parse_qs(self.path.partition("?")[2]).get("new", [""])[0])
         self.send(404, page(note("Not found.", True)))
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         if self.path == "/stripe-webhook" and n <= 512 * 1024:
             return self.stripe(self.rfile.read(n))
-        if n > 4096:
+        if n > 8192:  # a Google ID token is ~1.2 KB
             return self.send(413, page(note("Too much data.", True)))
         form = {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         path = self.path.split("?")[0]
@@ -434,16 +489,25 @@ class Handler(BaseHTTPRequestHandler):
         platform = form.get("platform", "")
         channel = form.get("channel", "")
         webhook = form.get("webhook", "")
-        name, email = form.get("name", "")[:60], form.get("email", "").lower()
         err = None
-        if not name or not EMAIL.match(email):
+        if form.get("google") and GOOGLE_ID:
+            try:
+                form["name"], form["email"] = google_identity(form["google"])
+                form["signin"] = "google"
+            except Exception as e:
+                log.warning("google sign-in: %r", e)
+                err = "Google sign-in didn't go through. Try again, or type your name and email."
+        name, email = form.get("name", "")[:60], form.get("email", "").lower()
+        if err:
+            pass
+        elif not name or not EMAIL.match(email):
             err = "Please enter your name and a valid email."
         elif platform not in CHANNEL or not CHANNEL[platform].match(channel):
             err = "That channel name doesn't look right."
         elif form.get("via") == "discord" and DISCORD_ID:
             state = secrets.token_urlsafe(24)
             with lock:
-                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "platform", "channel")})
+                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "platform", "channel", "signin")})
             q = urllib.parse.urlencode({"client_id": DISCORD_ID, "response_type": "code", "scope": "webhook.incoming",
                                         "redirect_uri": f"{PUBLIC_URL}/discord/callback", "state": state})
             return self.send(303, b"", location=f"https://discord.com/oauth2/authorize?{q}")
@@ -464,7 +528,8 @@ class Handler(BaseHTTPRequestHandler):
             token = token or secrets.token_urlsafe(24)
             p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
-                           "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p}
+                           "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p,
+                           "signin": form.get("signin") or "email"}
             save()
         if p == "pending":
             chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel}: <{manage_url(token)}>")
@@ -472,10 +537,10 @@ class Handler(BaseHTTPRequestHandler):
             start(token)
             chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel} will show up here while you're live.\n"
                                        f"Manage or stop it: <{manage_url(token)}>")
-        self.send(303, b"", location=f"/m/{token}")
+        self.send(303, b"", location=f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
 
-    def log_message(self, fmt, *args):  # keep tokens out of logs
-        log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path))
+    def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
+        log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
 
 
 def main() -> None:

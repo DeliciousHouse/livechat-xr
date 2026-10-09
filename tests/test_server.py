@@ -32,6 +32,7 @@ class Server(unittest.TestCase):
         server.regs.clear()
         self.posts, self.started = [], []
         server.check_webhook = lambda url: "LiveChat XR"
+        self.addCleanup(setattr, chat, "post_discord", chat.post_discord)  # other test modules need the real one
         chat.post_discord = lambda url, text: self.posts.append((url, text))
         server.start = lambda token, delay=0: self.started.append(token)
         server.stop = lambda token: None
@@ -93,7 +94,7 @@ class Server(unittest.TestCase):
     def test_register_update_delete(self):
         code, headers, _ = self.post("/register", name="Bren", email="b@example.com", platform="tiktok", channel="crosseyedsensei", webhook=HOOK)
         self.assertEqual(code, 303)
-        token = headers["Location"].rsplit("/", 1)[1]
+        token = headers["Location"].split("?")[0].rsplit("/", 1)[1]
         self.assertEqual(server.regs[token]["channel"], "@crosseyedsensei")
         self.assertIn(f"/m/{token}", self.posts[-1][1])  # manage link lands in their Discord channel
         self.assertTrue((server.DATA / "registrations.json").exists())
@@ -101,7 +102,7 @@ class Server(unittest.TestCase):
         self.assertNotIn(HOOK, page)  # never echo the webhook URL
         # same webhook again = update in place, same token
         code, headers, _ = self.post("/register", name="Bren", email="b@example.com", platform="twitch", channel="#SomeOne", webhook=HOOK)
-        self.assertEqual(headers["Location"], f"/m/{token}")
+        self.assertEqual(headers["Location"], f"/m/{token}?new=email")
         self.assertEqual((len(server.regs), server.regs[token]["channel"]), (1, "someone"))
         self.assertEqual(self.post(f"/m/{token}/delete")[0], 200)
         self.assertEqual(server.regs, {})
@@ -124,7 +125,7 @@ class Server(unittest.TestCase):
             hook2 = HOOK[:-1] + "b"
             self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", webhook=HOOK)
             code, headers, _ = self.post("/register", name="B", email="b@example.com", platform="tiktok", channel="b1", webhook=hook2)
-            token = headers["Location"].rsplit("/", 1)[1]
+            token = headers["Location"].split("?")[0].rsplit("/", 1)[1]
             self.assertEqual(server.regs[token]["plan"], "pending")
             self.assertEqual(len(self.started), 1)  # the pending one is not running
             page = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
@@ -183,6 +184,52 @@ class Server(unittest.TestCase):
         server.write_json("stats.json", {"tok": {"posts": 3}})
         self.assertEqual(json.loads((server.DATA / "stats.json").read_text()), {"tok": {"posts": 3}})
         server.logbuf.clear()
+
+    def test_log_drops_query_strings(self):
+        server.ADMIN_KEY = "k" * 32
+        try:
+            with self.assertLogs("relay", "INFO") as cm:
+                urllib.request.urlopen(f"{self.base}/admin?key={'k' * 32}").read()
+            self.assertIn("GET /admin", cm.output[-1])
+            self.assertFalse(any("k" * 32 in line for line in cm.output), "admin key must not be logged")
+        finally:
+            server.ADMIN_KEY = ""
+
+    def test_google_sign_in(self):
+        server.GOOGLE_ID = "cid.apps.googleusercontent.com"
+        server.google_identity = lambda cred: ("Gina G", "gina@example.com") if cred == "good" else (_ for _ in ()).throw(ValueError)
+        try:
+            self.assertIn(b'data-client_id="cid.apps.googleusercontent.com"', urllib.request.urlopen(self.base + "/").read())
+            # the verified Google identity wins over whatever the form says
+            code, headers, _ = self.post("/register", google="good", name="x", email="spoof@example.com",
+                                         platform="tiktok", channel="g1", webhook=HOOK)
+            self.assertEqual((code, headers["Location"].split("?")[1]), (303, "new=google"))
+            (reg,) = server.regs.values()
+            self.assertEqual((reg["name"], reg["email"], reg["signin"]), ("Gina G", "gina@example.com", "google"))
+            self.assertEqual(self.post("/register", google="forged", name="A", email="a@example.com",
+                                       platform="tiktok", channel="g1", webhook=HOOK)[0], 400)
+        finally:
+            server.GOOGLE_ID = ""
+
+    def test_analytics_never_sees_manage_token(self):
+        server.GA_ID = "G-TEST123"
+        try:
+            self.assertIn(b"gtag/js?id=G-TEST123", urllib.request.urlopen(self.base + "/").read())
+            _, headers, _ = self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", webhook=HOOK)
+            token = headers["Location"].split("?")[0].rsplit("/", 1)[1]
+            body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+            self.assertIn("location.origin+'/m/'", body)
+            self.assertIn("'sign_up',{method:'email'}", body)
+            self.assertNotIn(token, body.split("<body>")[0], "token must not reach the analytics config")
+            server.ADMIN_KEY = "k" * 32
+            self.assertNotIn(b"gtag", urllib.request.urlopen(f"{self.base}/admin?key={'k' * 32}").read())
+        finally:
+            server.GA_ID = server.ADMIN_KEY = ""
+
+    def test_privacy_page(self):
+        body = urllib.request.urlopen(self.base + "/privacy").read().decode()
+        self.assertIn("Stop and delete", body)
+        self.assertIn('href="/privacy"', urllib.request.urlopen(self.base + "/").read().decode())
 
     def test_cap(self):
         server.MAX_REGS = 1
