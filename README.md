@@ -34,6 +34,10 @@ The PC layer runs inside the game process. Only enable it where third-party Open
 
 Webhook URLs, private manage links, keys, config files and backups can grant access or contain private data. Do not post them in support issues. **Stop and delete does not cancel paid billing**; use the Stripe billing portal separately. See [troubleshooting](docs/user-guide.md#troubleshooting) or [report a problem](https://github.com/DeliciousHouse/livechat-xr/issues) with sanitized steps and your platform/version.
 
+For isolated relay simulation and visible Windows Settings without touching the installed profile,
+see [QA fixtures](docs/qa-fixtures.md). CI also uploads `LiveChatXR-Portable` for alternate-data testing
+without running an installer.
+
 ## License
 
 MIT for LiveChat XR's code. Bundled components keep their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Not affiliated with TikTok, Twitch, Meta or the Khronos Group.

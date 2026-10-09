@@ -61,6 +61,11 @@ jobs:
           $p = Start-Process dist\LiveChatXR\LiveChatXR.exe -ArgumentList '--check' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "packaged app failed --check ($($p.ExitCode))" }
 
+      - uses: actions/upload-artifact@v5
+        with:
+          name: LiveChatXR-Portable
+          path: dist/LiveChatXR/
+
       - name: Build installer
         shell: pwsh
         env:
