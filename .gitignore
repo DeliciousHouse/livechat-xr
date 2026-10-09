@@ -8,3 +8,5 @@ layer/*.lib
 layer/*.exp
 layer/*.obj
 tests/preview.png
+promo/_work/
+promo/out/
