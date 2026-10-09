@@ -1,10 +1,14 @@
 """LiveChat XR tray app: settings window + chat runner. The OpenXR layer does the drawing in-game."""
+import argparse
 import ctypes
+import hashlib
 import logging
 import os
 import queue
 import sys
 import threading
+import tempfile
+from pathlib import Path
 import tkinter as tk
 import winreg
 from logging.handlers import RotatingFileHandler
@@ -63,9 +67,10 @@ def icon_image() -> Image.Image:
 
 
 class App:
-    def __init__(self):
+    def __init__(self, settings=False, portable=False):
+        self.settings, self.portable = settings, portable
         self.runner = chat.Runner()
-        self.cfg = chat.load_config()
+        self.cfg = chat.load_config(portable=portable)
         self.ui: queue.Queue = queue.Queue()  # tray thread -> Tk thread
         self.root = tk.Tk()
         self.root.withdraw()
@@ -83,7 +88,7 @@ class App:
             chat.save_config(self.cfg)  # the layer reads [games]/[banner] from here
         self.icon.run_detached()
         self.runner.start(self.cfg)
-        if not self.cfg["chat"]["channel"].strip():
+        if self.settings or not self.cfg["chat"]["channel"].strip():
             self.open_settings()
         self.root.after(200, self.pump)
         self.root.mainloop()
@@ -109,7 +114,7 @@ class App:
             self.win.lift()
             return
         w = self.win = tk.Toplevel(self.root)
-        w.title(f"{APP} settings")
+        w.title(f"{APP} settings" + (" — alternate data profile" if self.portable else ""))
         w.resizable(False, False)
         f = ttk.Frame(w, padding=14)
         f.grid()
@@ -126,8 +131,11 @@ class App:
             ttk.Entry(f, textvariable=v, width=36, show="•" if "key" in key or "webhook" in key else "").grid(row=i, column=1, pady=3)
             self.vars[(sec, key)] = v
         n = len(FIELDS) + 1
-        self.auto = tk.BooleanVar(value=autostart_enabled())
-        ttk.Checkbutton(f, text="Start with Windows", variable=self.auto).grid(row=n, column=1, sticky="w", pady=6)
+        self.auto = tk.BooleanVar(value=False if self.portable else autostart_enabled())
+        auto = ttk.Checkbutton(f, text="Start with Windows", variable=self.auto)
+        auto.grid(row=n, column=1, sticky="w", pady=6)
+        if self.portable:
+            auto.state(["disabled"])
         ttk.Label(f, text="Placement and game changes apply the next time the game starts.",
                   foreground="#666").grid(row=n + 1, column=0, columnspan=2, sticky="w")
         self.status_var = tk.StringVar(value=self.runner.status)
@@ -150,7 +158,8 @@ class App:
             self.cfg[sec][key] = val
         self.cfg["chat"]["platform"] = self.platform.get()
         chat.save_config(self.cfg)
-        set_autostart(self.auto.get())
+        if not self.portable:
+            set_autostart(self.auto.get())
         self.runner.start(self.cfg)
         self.win.withdraw()
 
@@ -160,19 +169,53 @@ class App:
         self.root.destroy()
 
 
-def main():
-    if sys.argv[1:] == ["--check"]:  # packaging smoke test (CI): exit 0 if the bundled deps import
+def mutex_name(directory=None):
+    if directory is None:
+        return "LiveChatXR.single-instance"
+    digest = hashlib.sha256(os.path.normcase(str(directory.resolve())).encode()).hexdigest()
+    return "LiveChatXR.profile." + digest
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=APP)
+    parser.add_argument("--check", action="store_true", help="check bundled dependencies and exit")
+    parser.add_argument("--settings", action="store_true", help="open Settings even with a configured channel")
+    parser.add_argument("--data-dir", type=Path, help="absolute alternate profile; no autostart or layer registration")
+    args = parser.parse_args(argv)
+    if args.check:  # packaging smoke test (CI): exit 0 if the bundled deps import
         import TikTokLive.events  # noqa: F401
-        sys.exit(0)
+        return
+    if args.data_dir is not None:
+        try:
+            if not args.data_dir.is_absolute():
+                raise ValueError("--data-dir must be absolute")
+            directory = args.data_dir.resolve()
+            owner = (Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR").resolve()
+            if directory == owner or owner in directory.parents or directory in owner.parents:
+                raise ValueError("--data-dir must be separate from the installed profile")
+            directory.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryFile(dir=directory):
+                pass  # fail before runner/UI, with no fallback to the installed profile
+        except (OSError, ValueError) as e:
+            parser.error(str(e))
+        chat.DIR = directory
     chat.DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s",
                         handlers=[RotatingFileHandler(chat.DIR / "app.log", maxBytes=1 << 20, backupCount=1, encoding="utf-8")])
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    ctypes.windll.kernel32.CreateMutexW(None, False, "LiveChatXR.single-instance")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-        ctypes.windll.user32.MessageBoxW(None, f"{APP} is already running (see the tray).", APP, 0x40)
-        return
-    App().run()
+    kernel = ctypes.windll.kernel32
+    kernel.CreateMutexW.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel.CreateMutexW(None, False, mutex_name(chat.DIR if args.data_dir is not None else None))
+    if not handle:
+        raise ctypes.WinError()
+    try:
+        if kernel.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            ctypes.windll.user32.MessageBoxW(None, f"{APP} profile is already running (see the tray).", APP, 0x40)
+            return
+        App(settings=args.settings, portable=args.data_dir is not None).run()
+    finally:
+        kernel.CloseHandle(handle)
 
 
 if __name__ == "__main__":
