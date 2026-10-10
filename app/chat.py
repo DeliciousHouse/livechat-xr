@@ -12,12 +12,15 @@ import random
 import re
 import ssl
 import threading
+import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
-    "chat": {"tiktok": "", "twitch": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": ""},
+    "chat": {"tiktok": "", "twitch": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": "",
+             "follow_ask": "follow for the next sword-only run"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -51,11 +54,12 @@ def save_config(cp: configparser.ConfigParser) -> None:
 
 
 GIFT = "🎁 "  # the layer draws lines starting with this in gold
+ASK = "» "  # follow-ask lines take priority over gifts and comments
 
 
 def batch(lines: list[str], max_lines: int = 3) -> str:
-    """Merge queued lines into one banner; gifts go first so they never end up in "+N more"."""
-    lines = sorted(lines, key=lambda line: not line.startswith(GIFT))  # stable: keeps arrival order
+    """Merge queued lines into one banner: follow asks, gifts, then comments, up to max_lines."""
+    lines = sorted(lines, key=lambda line: (not line.startswith(ASK), not line.startswith(GIFT)))
     shown = lines[:max_lines]
     extra = len(lines) - len(shown)
     return "\n".join(shown) + (f"\n+{extra} more" if extra else "")
@@ -149,10 +153,66 @@ def _who(u) -> tuple[str, str]:
     return handle, (getattr(u, "nickname", "") if u else "") or handle or "?"
 
 
-async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
+def _following(u) -> bool | None:
+    """Does this TikTok viewer follow the streamer? follow_info.follow_status 0 = no, 1 = follows, 2 = friends;
+    None when TikTok didn't send it."""
+    status = getattr(getattr(u, "follow_info", None), "follow_status", None)
+    return status >= 1 if isinstance(status, int) else None
+
+
+class Session:
+    """One TikTok LIVE connection: the follow ask plus the new-follower tally written to sessions.jsonl.
+
+    A viewer's second message (or a later one, if the global cooldown blocked it) gets `ask` once, unless they
+    are a known follower; unknown follow status is asked. At most one ask per `every` seconds across all viewers."""
+
+    def __init__(self, ask: str, every: float = 90):
+        self.ask, self.every = ask.strip(), every
+        self.start = datetime.now(timezone.utc)
+        self.said: dict[str, int] = {}
+        self.done: set[str] = set()  # asked already or known follower
+        self.followers: set[str] = set()
+        self.last: float | None = None
+        self.asks = 0
+        self.peak: int | None = None
+
+    def comment(self, viewer: str, following: bool | None, now: float) -> str | None:
+        """Count a chat message; return the banner line to show, or None."""
+        self.said[viewer] = self.said.get(viewer, 0) + 1
+        if following:
+            self.done.add(viewer)
+        if (not self.ask or self.said[viewer] < 2 or viewer in self.done
+                or (self.last is not None and now - self.last < self.every)):
+            return None
+        self.done.add(viewer)
+        self.last, self.asks = now, self.asks + 1
+        return ASK + self.ask
+
+    def follow(self, viewer: str) -> None:
+        self.followers.add(viewer)  # distinct viewers: a re-follow in the same stream counts once
+        self.done.add(viewer)
+
+    def viewers(self, n: int) -> None:
+        self.peak = max(self.peak or 0, n)
+
+    def save(self, channel: str) -> dict:
+        row = {"start": self.start.isoformat(timespec="seconds"),
+               "end": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "channel": "@" + channel, "peak_viewers": self.peak,
+               "new_follows": len(self.followers), "asks_shown": self.asks}
+        DIR.mkdir(parents=True, exist_ok=True)
+        with open(DIR / "sessions.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        log.info("tiktok session: %s", row)
+        return row
+
+
+async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None) -> None:
+    """follow_ask=None: plain chat (hosted relay). A string turns on a Session per connection: the follow ask
+    (empty string = no ask) and a sessions.jsonl row when the connection ends."""
     from TikTokLive import TikTokLiveClient
     from TikTokLive.client.errors import UserNotFoundError
-    from TikTokLive.events import CommentEvent, ConnectEvent, GiftEvent
+    from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, GiftEvent, RoomUserSeqEvent
 
     user = user.lstrip("@")
     missing = 0
@@ -160,11 +220,14 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
         os.environ["SIGN_API_KEY"] = sign_api_key  # read by TikTokLive's signer
     while True:
         client = TikTokLiveClient(unique_id=user)
+        session: Session | None = None
 
         @client.on(ConnectEvent)
         async def _(e: ConnectEvent):
-            nonlocal missing
+            nonlocal missing, session
             missing = 0
+            if follow_ask is not None:
+                session = Session(follow_ask)
             status(f"TikTok: connected to @{user}")
 
         @client.on(CommentEvent)
@@ -172,6 +235,19 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
             handle, name = _who(e.user)
             if handle.lower() != user.lower():  # skip the streamer's own messages
                 emit(f"{name}: {e.comment}")
+                if session and (ask := session.comment(handle.lower() or name, _following(e.user), time.monotonic())):
+                    emit(ask)
+
+        @client.on(FollowEvent)
+        async def _(e: FollowEvent):
+            if session:
+                handle, name = _who(e.user)
+                session.follow(handle.lower() or name)
+
+        @client.on(RoomUserSeqEvent)
+        async def _(e: RoomUserSeqEvent):
+            if session and isinstance(getattr(e, "total", None), int):
+                session.viewers(e.total)  # current viewer count; peak_viewers is its max
 
         @client.on(GiftEvent)
         async def _(e: GiftEvent):
@@ -200,17 +276,24 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
                 status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({type(e).__name__})")
             if not offline:
                 log.warning("tiktok: %r", e)
+        finally:
+            if session:  # stream ended, app stopped or connection dropped; a reconnect starts a new row
+                try:
+                    session.save(user)
+                except OSError as e:
+                    log.warning("sessions.jsonl: %r", e)
         await asyncio.sleep(retry)
 
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
-                sign_api_key: str = "", channels: dict[str, str] | None = None) -> None:
+                sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
-    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either still sort
-    first); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source."""
+    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either sort
+    before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
+    follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None."""
     queue: list[str] = []
     channels = channels or {platform: channel}
     statuses: dict[str, str] = {}
@@ -219,7 +302,7 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
         def st(s: str) -> None:
             statuses[p] = s
             status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: …"
-        return tiktok(c.strip(), queue.append, st, sign_api_key) if p.lower() == "tiktok" else twitch(c.strip(), queue.append, st)
+        return tiktok(c.strip(), queue.append, st, sign_api_key, follow_ask) if p.lower() == "tiktok" else twitch(c.strip(), queue.append, st)
 
     srcs = [asyncio.ensure_future(source(p, c)) for p, c in channels.items()]
     try:
@@ -260,7 +343,8 @@ class Runner:
 
         await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
-                    cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg))
+                    cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg),
+                    follow_ask=cfg["chat"].get("follow_ask", ""))
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
