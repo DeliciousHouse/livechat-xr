@@ -1,0 +1,10 @@
+<resources>
+    <!-- Native system font/widgets: minimal accessible probe, not the web UI. -->
+    <style name="ProbeTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#7c4dff</item>
+        <item name="android:windowBackground">#0f0d16</item>
+        <item name="android:textColorPrimary">#eceaf4</item>
+        <item name="android:textColorSecondary">#c9c5d8</item>
+    </style>
+</resources>

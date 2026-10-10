@@ -49,6 +49,10 @@ new line. This works even with the ask turned off. Details: [reference](docs/ref
 
 ## Safety and support
 
+Experimental standalone audio only: [Quest background-audio probe runbook](probe/quest-audio/quest-audio-probe-runbook.md).
+This debug APK loops numbered speech; it is not chat TTS. Physical Quest / Population: ONE
+coexistence is still unverified; APK delivery does not pass the background-audio feasibility gate.
+
 The PC layer runs inside the game process. Only enable it where third-party OpenXR overlays are allowed; anti-cheat compatibility is not guaranteed. Uninstall removes its machine-wide registration. `LIVECHATXR_DISABLE=1` in the game's environment is the layer kill switch.
 
 Webhook URLs, private manage links, keys, config files and backups can grant access or contain private data. Do not post them in support issues. **Stop and delete does not cancel paid billing**; use the Stripe billing portal separately. See [troubleshooting](docs/user-guide.md#troubleshooting) or [report a problem](https://github.com/DeliciousHouse/livechat-xr/issues) with sanitized steps and your platform/version.
