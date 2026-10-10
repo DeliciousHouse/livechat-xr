@@ -130,6 +130,9 @@ class App:
             ttk.Entry(f, textvariable=v, width=36, show="•" if "key" in key or "webhook" in key else "").grid(row=i, column=1, pady=3)
             self.vars[(sec, key)] = v
         n = len(FIELDS) + 1
+        self.show_tag = tk.BooleanVar(value=self.cfg.getboolean("chat", "show_tag", fallback=True))
+        ttk.Checkbutton(f, text="Show LiveChat XR tag", variable=self.show_tag).grid(row=n, column=1, sticky="w", pady=6)
+        n += 1
         self.auto = tk.BooleanVar(value=False if self.portable else autostart_enabled())
         auto = ttk.Checkbutton(f, text="Start with Windows", variable=self.auto)
         auto.grid(row=n, column=1, sticky="w", pady=6)
@@ -155,6 +158,7 @@ class App:
                     messagebox.showerror(APP, f"'{val}' is not a valid number for {key}.", parent=self.win)
                     return
             self.cfg[sec][key] = val
+        self.cfg["chat"]["show_tag"] = str(bool(self.show_tag.get())).lower()
         chat.save_config(self.cfg)
         if not self.portable:
             set_autostart(self.auto.get())

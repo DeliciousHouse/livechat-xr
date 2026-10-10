@@ -37,6 +37,8 @@ Start your PCVR game. Right-click the tray icon and choose **Send test banner**.
 
 Next, go live on your chosen platform and have someone else post a comment. Your own normal comments are skipped. New comments share one banner; gifts/support are gold. More than three selected lines become a `+N more` summary, and long text can be clipped. This is a quick glance at chat, not a full chat log.
 
+**Show LiveChat XR tag** is on by default (`[chat] show_tag = true` in `config.ini`). Each connection shows `LiveChat XR - livechat.deliciouswines.org` through the normal fading banner. TikTok follow asks end with `  - LiveChat XR`; gifts and comments are unchanged. Uncheck it in Settings and Save to disable both banner tags.
+
 ### What you set up
 
 The app reads stream chat; the VR layer draws it inside the chosen PC game. Restart the game after changing Games, placement or duration. Keep the tray app running. **Quit** stops new chat updates. To remove the layer, uninstall LiveChat XR through Windows Apps. Only use it with games that permit third-party OpenXR overlays; anti-cheat compatibility is not guaranteed.
@@ -91,6 +93,8 @@ On the hosted relay, return to signup with the **same manual Discord webhook**, 
 ## Pricing and billing
 
 The hosted relay's first **five available free registrations** are free; after that it offers **$3 per month** or **$25 per year**. A free slot is per registration/webhook, not a coupon or five free messages. The code counts currently active free registrations, so deleting one frees a slot. An existing free registration stays free when updated with the same webhook. Availability is determined when connecting; the manage page tells you whether payment is needed. The service also has a total capacity limit and can say it is full.
+
+Free relay registrations append `via LiveChat XR - livechat.deliciouswines.org` as one extra line on the first chat batch after a source connects, including reconnects. Later batches are unchanged; paid registrations have no tag. No extra Discord post is sent just for the tag.
 
 If you are waiting for payment, use a plan link **on your private manage page** so Stripe can match payment to that connection. Refresh the page after payment. Do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. These prices apply to the hosted relay, not a subscription gate in the PC app.
 
