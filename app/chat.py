@@ -121,7 +121,7 @@ def twitch_line(line: str, channel: str) -> str | None:
         return None  # individual subs of a mass gift: the submysterygift line already covers them
     return GIFT + (tags.get("system-msg") or f"{name}: {kind}") + (f" — {msg}" if msg else "")
 
-async def twitch(channel: str, emit, status) -> None:
+async def twitch(channel: str, emit, status, tally=None) -> None:
     channel = channel.lower().lstrip("#")
     while True:
         try:
@@ -138,6 +138,12 @@ async def twitch(channel: str, emit, status) -> None:
                     w.write(f"PONG{line[4:]}\r\n".encode())
                     await w.drain()
                 elif out := twitch_line(line, channel):
+                    parsed = _LINE.match(line)
+                    if tally and parsed:
+                        if parsed["cmd"] == "USERNOTICE" or _tags(parsed["tags"] or "").get("bits"):
+                            tally.gifts += 1
+                        else:
+                            tally.comment(parsed["login"].lower())
                     emit(out)
         except asyncio.CancelledError:
             raise
@@ -159,6 +165,40 @@ def _following(u) -> bool | None:
     None when TikTok didn't send it."""
     status = getattr(getattr(u, "follow_info", None), "follow_status", None)
     return status >= 1 if isinstance(status, int) else None
+
+
+def session_summary(row: dict) -> str:
+    minutes = max(0, int((datetime.fromisoformat(row["end"]) -
+                          datetime.fromisoformat(row["start"])).total_seconds() // 60))
+    hours, minutes = divmod(minutes, 60)
+    parts = [f"Stream ended {row['channel']}", f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"]
+    for key, label in (("comments", "{} comments"), ("distinct_chatters", "{} distinct chatters"),
+                       ("gifts", "{} gifts/support events"), ("peak_viewers", "peak {} viewers"),
+                       ("new_follows", "{} new follows"), ("asks_shown", "{} follow asks shown")):
+        if row.get(key) is not None:
+            parts.append(label.format(row[key]))
+    return " - ".join(parts)
+
+
+class Tally:
+    """Connection-local counts; chatter identifiers never leave memory."""
+    def __init__(self, platform: str, channel: str):
+        self.platform, self.channel = platform, "@" + channel.lstrip("@#")
+        self.start = datetime.now(timezone.utc)
+        self.comments, self.gifts = 0, 0
+        self.chatters, self.followers = set(), set()
+        self.peak: int | None = None
+
+    def comment(self, viewer: str) -> None:
+        self.comments += 1
+        self.chatters.add(viewer)
+
+    def row(self) -> dict:
+        return {"start": self.start.isoformat(timespec="seconds"),
+                "end": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "platform": self.platform, "channel": self.channel, "comments": self.comments,
+                "distinct_chatters": len(self.chatters), "gifts": self.gifts, "peak_viewers": self.peak,
+                "new_follows": len(self.followers) if self.platform == "tiktok" else None}
 
 
 class Session:
@@ -196,7 +236,7 @@ class Session:
     def viewers(self, n: int) -> None:
         self.peak = max(self.peak or 0, n)
 
-    def save(self, channel: str) -> dict:
+    def save(self, channel: str, webhook: str = "") -> dict:
         row = {"start": self.start.isoformat(timespec="seconds"),
                "end": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                "channel": "@" + channel, "peak_viewers": self.peak,
@@ -205,10 +245,18 @@ class Session:
         with open(DIR / "sessions.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
         log.info("tiktok session: %s", row)
+        if webhook:
+            text = session_summary(row)
+            for notify in (lambda: write_banner(text), lambda: post_discord(webhook, text)):
+                try:
+                    notify()
+                except Exception:
+                    log.warning("session notification failed")
         return row
 
 
-async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None) -> None:
+async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None,
+                 tally: Tally | None = None, webhook: str = "") -> None:
     """follow_ask=None: plain chat (hosted relay). A string turns on a Session per connection: the follow ask
     (empty string = no ask) and a sessions.jsonl row when the connection ends."""
     from TikTokLive import TikTokLiveClient
@@ -235,18 +283,25 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         async def _(e: CommentEvent):
             handle, name = _who(e.user)
             if handle.lower() != user.lower():  # skip the streamer's own messages
+                if tally:
+                    tally.comment(handle.lower() or name)
                 emit(f"{name}: {e.comment}")
                 if session and (ask := session.comment(handle.lower() or name, _following(e.user), time.monotonic())):
                     emit(ask)
 
         @client.on(FollowEvent)
         async def _(e: FollowEvent):
+            if tally:
+                handle, name = _who(e.user)
+                tally.followers.add(handle.lower() or name)
             if session:
                 handle, name = _who(e.user)
                 session.follow(handle.lower() or name)
 
         @client.on(RoomUserSeqEvent)
         async def _(e: RoomUserSeqEvent):
+            if tally and isinstance(getattr(e, "total", None), int):
+                tally.peak = max(tally.peak or 0, e.total)
             if session and isinstance(getattr(e, "total", None), int):
                 session.viewers(e.total)  # current viewer count; peak_viewers is its max
 
@@ -255,6 +310,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
             if e.streaking or not e.gift:  # a combo sends many events; show only the final total
                 return
             n = e.repeat_count or 1
+            if tally:
+                tally.gifts += 1
             emit(f"{GIFT}{_who(e.user)[1]} sent {e.gift.name}" + (f" x{n}" if n > 1 else ""))
 
         retry = 60
@@ -280,8 +337,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         finally:
             if session:  # stream ended, app stopped or connection dropped; a reconnect starts a new row
                 try:
-                    session.save(user)
-                except OSError as e:
+                    await asyncio.to_thread(session.save, user, webhook)
+                except Exception as e:
                     log.warning("sessions.jsonl: %r", e)
         await asyncio.sleep(retry)
 
@@ -381,7 +438,7 @@ def _yt_chat(info: dict, continuation: str) -> dict:
         return json.load(r).get("continuationContents", {}).get("liveChatContinuation", {})
 
 
-async def youtube(handle: str, emit, status) -> None:
+async def youtube(handle: str, emit, status, tally=None) -> None:
     """Chat of the channel's current live stream, read the way the live page itself does (no API key, no login).
     The backlog YouTube sends on (re)connect is skipped so the banner never replays old chat."""
     handle = handle.strip().lstrip("@")
@@ -404,6 +461,12 @@ async def youtube(handle: str, emit, status) -> None:
                         continue
                     seen[item_id] = None
                     if not backlog and (line := youtube_line(item, info["owner"])):
+                        if tally:
+                            if next(iter(item)) != "liveChatTextMessageRenderer":
+                                tally.gifts += 1
+                            else:
+                                renderer = next(iter(item.values()))
+                                tally.comment(renderer.get("authorExternalChannelId") or _yt_text(renderer.get("authorName")))
                         emit(line)
                 while len(seen) > 4000:  # ids only matter across one response boundary
                     del seen[next(iter(seen))]
@@ -425,7 +488,8 @@ async def youtube(handle: str, emit, status) -> None:
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
-                sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None) -> None:
+                sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
+                on_session=None, webhook: str = "") -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
@@ -437,13 +501,31 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
     statuses: dict[str, str] = {}
 
     def source(p: str, c: str):
+        p, c = p.lower(), c.strip()
+        tally = Tally(p, c) if on_session else None
+        active = False
         def st(s: str) -> None:
+            nonlocal active
+            if tally:
+                if ": connected to " in s:
+                    tally.__init__(p, c)
+                    active = True
+                elif "went offline" in s and active:
+                    active = False  # consume before callback: failures never duplicate a summary
+                    try:
+                        on_session(tally.row())
+                    except Exception:
+                        log.warning("stream stats failed")
+                elif ": retrying" in s or ": reconnecting" in s:
+                    active = False  # a transport error is not proof that the stream ended
             statuses[p] = s
             status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: … · YouTube: …"
-        p, c = p.lower(), c.strip()
+        kwargs: dict = {"tally": tally} if tally else {}
         if p == "tiktok":
-            return tiktok(c, queue.append, st, sign_api_key, follow_ask)
-        return youtube(c, queue.append, st) if p == "youtube" else twitch(c, queue.append, st)
+            if webhook:
+                kwargs["webhook"] = webhook
+            return tiktok(c, queue.append, st, sign_api_key, follow_ask, **kwargs)
+        return youtube(c, queue.append, st, **kwargs) if p == "youtube" else twitch(c, queue.append, st, **kwargs)
 
     srcs = [asyncio.ensure_future(source(p, c)) for p, c in channels.items()]
     try:
@@ -485,7 +567,7 @@ class Runner:
         await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
                     cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg),
-                    follow_ask=cfg["chat"].get("follow_ask", ""))
+                    follow_ask=cfg["chat"].get("follow_ask", ""), webhook=webhook)
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
