@@ -11,6 +11,13 @@ import chat  # noqa: E402
 
 
 class Batch(unittest.TestCase):
+    def test_tag_only_follow_asks(self):
+        lines = ["Fan: hi", chat.GIFT + "Fan sent Rose", chat.ASK + "follow me"]
+        self.assertEqual(chat.batch(lines, show_tag=True),
+                         "» follow me  - LiveChat XR\n🎁 Fan sent Rose\nFan: hi")
+        self.assertEqual(chat.batch(lines, show_tag=False),
+                         "» follow me\n🎁 Fan sent Rose\nFan: hi")
+
     def test_single(self):
         self.assertEqual(chat.batch(["a: 1"]), "a: 1")
 
@@ -140,6 +147,40 @@ class TikTok(unittest.TestCase):
 
 
 class Relay(unittest.TestCase):
+    def test_runner_tag_on_each_connection_and_opt_out(self):
+        async def source(channel, emit, status, key="", ask=None):
+            status(f"{platform}: connected to qa")
+            status(f"{platform}: connected to qa")  # not another connection
+            emit(chat.ASK + "follow me")
+            emit("Fan: hi")
+            await asyncio.sleep(0.03)
+            status(f"{platform}: reconnecting (ConnectionError)")
+            status(f"{platform}: connected to qa")
+            await asyncio.sleep(3600)
+
+        for platform, enabled in [(p, e) for p in chat.PLATFORMS for e in (True, False)]:
+            with self.subTest(platform=platform, enabled=enabled), tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(chat, "DIR", Path(d)), mock.patch.object(chat, platform, source), \
+                    mock.patch.object(chat, "write_banner") as banner, mock.patch.object(chat, "post_discord") as discord:
+                cfg = chat.load_config()
+                self.assertTrue(cfg.getboolean("chat", "show_tag"))
+                cfg["chat"][platform], cfg["chat"]["show_tag"] = "qa", str(enabled)
+                cfg["banner"]["seconds"] = "0.01"
+
+                async def go():
+                    task = asyncio.create_task(chat.Runner()._main(cfg))
+                    await asyncio.sleep(0.07)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+
+                asyncio.run(go())
+                texts = [c.args[0] for c in banner.call_args_list]
+                intro = "LiveChat XR - livechat.deliciouswines.org"
+                self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\nFan: hi", intro] if enabled
+                                 else ["» follow me\nFan: hi"])
+                discord.assert_not_called()
+
     def run_relay(self, channels, fake_tiktok, fake_twitch, seconds=0.05, wait=0.2):
         batches, statuses = [], []
 

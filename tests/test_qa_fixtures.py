@@ -1,5 +1,6 @@
 """Disposable launcher flow and Windows app isolation boundaries."""
 import ctypes
+import asyncio
 import http.client
 import sys
 import tempfile
@@ -13,6 +14,53 @@ sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "app")]
 
 
 class RelayFixture(unittest.TestCase):
+    def test_free_tag_once_per_stream(self):
+        import qa_relay
+        import chat
+        server = qa_relay.server
+        relay = chat.relay
+        tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
+
+        async def source(channel, emit, status, key="", ask=None):
+            status(f"{platform}: connected to qa")
+            emit("Fan: first")
+            await asyncio.sleep(0.03)
+            status(f"{platform}: connected to qa")
+            emit("Fan: second")
+            await asyncio.sleep(0.03)
+            status(f"{platform}: qa went offline, waiting")
+            status(f"{platform}: connected to qa")
+            emit("x" * 2000)
+            await asyncio.sleep(0.03)
+            emit("Fan: fourth")
+            await asyncio.sleep(3600)
+
+        async def fast_relay(*args, **kwargs):
+            await relay(*args, seconds=0.01, **kwargs)
+
+        with qa_relay.fixture():
+            self.assertIn("Free posts carry a one-line tag; paid posts do not.", server.home().decode())
+            for platform, plan in [(p, tier) for p in chat.PLATFORMS for tier in ("free", "paid")]:
+                with self.subTest(platform=platform, plan=plan):
+                    server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan,
+                                             webhook=qa_relay.HOOKS["fixture-one"])
+                    posts = []
+                    def thread(target, args, daemon):
+                        return mock.Mock(start=lambda: target(*args))
+                    with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
+                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text: posts.append(text)), \
+                            mock.patch.object(server.threading, "Thread", side_effect=thread):
+                        async def go():
+                            task = asyncio.create_task(server.run("qa"))
+                            await asyncio.sleep(0.13)
+                            task.cancel()
+                            with self.assertRaises(asyncio.CancelledError):
+                                await task
+                        asyncio.run(go())
+                    self.assertEqual(posts, ["Fan: first" + tag, "Fan: second",
+                                             "x" * (2000 - len(tag)) + tag, "Fan: fourth"] if plan == "free"
+                                     else ["Fan: first", "Fan: second", "x" * 2000, "Fan: fourth"])
+
     def test_launcher_flow(self):
         import qa_relay
         with qa_relay.fixture() as srv:
@@ -102,9 +150,11 @@ class PortableApp(unittest.TestCase):
             obj.vars, obj.platform = {}, mock.Mock()
             obj.platform.get.return_value = "twitch"
             obj.runner, obj.win = mock.Mock(), mock.Mock()
+            obj.show_tag = mock.Mock(get=lambda: False)
             with mock.patch.object(app, "set_autostart") as auto:
                 obj.save()
                 auto.assert_not_called()
+            self.assertFalse(chat.load_config(portable=True).getboolean("chat", "show_tag"))
             obj.test_banner()
             self.assertTrue((alternate / "banner.txt").exists())
             self.assertTrue((alternate / "config.ini").exists())

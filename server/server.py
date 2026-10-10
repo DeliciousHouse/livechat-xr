@@ -202,6 +202,11 @@ def check_channel(platform: str, channel: str) -> bool | None:
 async def run(token: str, delay: float = 0) -> None:
     await asyncio.sleep(delay)  # stagger startup: TikTok's sign server rate-limits connects per IP
     r = regs[token]
+    tag_pending = False
+
+    def on_connect() -> None:
+        nonlocal tag_pending
+        tag_pending = True
 
     def post(text: str) -> None:
         ok = chat.post_discord(r["webhook"], text) is not False
@@ -213,6 +218,11 @@ async def run(token: str, delay: float = 0) -> None:
             st["last_error"] = time.strftime("%m-%d %H:%M") + " Discord post failed"
 
     def on_batch(text: str) -> None:
+        nonlocal tag_pending
+        if tag_pending and plan(r) == "free":
+            tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
+            text = text[:2000 - len(tag)] + tag
+        tag_pending = False
         threading.Thread(target=post, args=(text,), daemon=True).start()
 
     def on_status(s: str) -> None:
@@ -222,7 +232,7 @@ async def run(token: str, delay: float = 0) -> None:
 
     while True:
         try:
-            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r))
+            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r), on_connect=on_connect)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -340,7 +350,8 @@ BigFan: nice shot!
 Mike: GG
 +2 more</div></div></div>
 <figcaption class="cap" data-pretext>What you see in the headset: a normal Quest notification, mid-game.</figcaption></figure>
-<span class="chip">First spots free · then $3/month</span></div>
+<span class="chip">First spots free · then $3/month</span>
+<p class="hint">Free posts carry a one-line tag; paid posts do not.</p></div>
 {msg}
 <form class="card" method="post" action="/register" aria-label="Set up LiveChat XR for Discord">
 <section class="step" aria-labelledby="s1"><div class="n" aria-hidden="true">1</div><div><h2 id="s1">Your channel</h2>

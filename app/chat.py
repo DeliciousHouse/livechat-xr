@@ -20,7 +20,7 @@ from pathlib import Path
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
     "chat": {"tiktok": "", "twitch": "", "youtube": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "",
-             "discord_webhook": "", "follow_ask": "follow for the next sword-only run"},
+             "discord_webhook": "", "follow_ask": "follow for the next sword-only run", "show_tag": "true"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -58,10 +58,11 @@ GIFT = "🎁 "  # the layer draws lines starting with this in gold
 ASK = "» "  # follow-ask lines take priority over gifts and comments
 
 
-def batch(lines: list[str], max_lines: int = 3) -> str:
+def batch(lines: list[str], max_lines: int = 3, show_tag: bool = False) -> str:
     """Merge queued lines into one banner: follow asks, gifts, then comments, up to max_lines."""
     lines = sorted(lines, key=lambda line: (not line.startswith(ASK), not line.startswith(GIFT)))
-    shown = lines[:max_lines]
+    shown = [line + "  - LiveChat XR" if show_tag and line.startswith(ASK) else line
+             for line in lines[:max_lines]]
     extra = len(lines) - len(shown)
     return "\n".join(shown) + (f"\n+{extra} more" if extra else "")
 
@@ -425,21 +426,27 @@ async def youtube(handle: str, emit, status) -> None:
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
-                sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None) -> None:
+                sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
+                show_tag: bool = False, on_connect=None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
     channels={"tiktok": "@a", "twitch": "b", "youtube": "@c"} reads all of them into the same batches (gifts from any
     sort before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
-    follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None."""
+    follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None.
+    show_tag tags only ASK lines; on_connect fires on each source's connected status transition."""
     queue: list[str] = []
     channels = channels or {platform: channel}
     statuses: dict[str, str] = {}
 
     def source(p: str, c: str):
         def st(s: str) -> None:
+            connected = s.partition(":")[2].startswith(" connected to ")
+            new_connection = connected and statuses.get(p) != s
             statuses[p] = s
             status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: … · YouTube: …"
+            if new_connection and on_connect:
+                on_connect()
         p, c = p.lower(), c.strip()
         if p == "tiktok":
             return tiktok(c, queue.append, st, sign_api_key, follow_ask)
@@ -452,7 +459,7 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
             if queue:
                 lines = queue[:]
                 queue.clear()
-                on_batch(batch(lines, max_lines))
+                on_batch(batch(lines, max_lines, show_tag))
         for s in srcs:
             if s.done():
                 s.result()
@@ -476,6 +483,7 @@ class Runner:
 
     async def _main(self, cfg: configparser.ConfigParser) -> None:
         webhook = cfg["chat"].get("discord_webhook", "").strip()
+        show_tag = cfg.getboolean("chat", "show_tag", fallback=True)
 
         def on_batch(text: str) -> None:
             write_banner(text)
@@ -485,7 +493,8 @@ class Runner:
         await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
                     cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg),
-                    follow_ask=cfg["chat"].get("follow_ask", ""))
+                    follow_ask=cfg["chat"].get("follow_ask", ""), show_tag=show_tag,
+                    on_connect=(lambda: write_banner("LiveChat XR - livechat.deliciouswines.org")) if show_tag else None)
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
