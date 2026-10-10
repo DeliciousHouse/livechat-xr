@@ -321,7 +321,7 @@ DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" ari
 # The Quest shows a stock Meta notification from the Discord app (no custom styling); the body is one chat.batch().
 HOME = """<div class="hero">
 <h1 data-pretext>Stream chat on your Quest, <em>through Discord.</em></h1>
-<p class="sub" data-pretext>TikTok LIVE or Twitch. No PC, nothing to install on the headset.</p>
+<p class="sub" data-pretext>TikTok LIVE, Twitch or both. No PC, nothing to install on the headset.</p>
 <figure style="margin:0"><div class="qn" role="img" aria-label="Example Quest notification from Discord in #stream-chat: Sam sent Rose x10, BigFan: nice shot!, Mike: GG, plus 2 more">
 <div class="ic" aria-hidden="true">{icon}</div><div aria-hidden="true"><div class="hd"><b>Discord</b><span>now</span></div>
 <div class="ti">#stream-chat · LiveChat XR</div><div class="bd">🎁 Sam sent Rose x10
