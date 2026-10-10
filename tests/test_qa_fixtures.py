@@ -21,7 +21,7 @@ class RelayFixture(unittest.TestCase):
         relay = chat.relay
         tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
 
-        async def source(channel, emit, status, key="", ask=None):
+        async def source(channel, emit, status, key="", ask=None, tally=None):
             status(f"{platform}: connected to qa")
             emit("Fan: first")
             await asyncio.sleep(0.03)
@@ -57,6 +57,7 @@ class RelayFixture(unittest.TestCase):
                             with self.assertRaises(asyncio.CancelledError):
                                 await task
                         asyncio.run(go())
+                    posts = [text for text in posts if not text.startswith("Stream ended")]
                     self.assertEqual(posts, ["Fan: first" + tag, "Fan: second",
                                              "x" * (2000 - len(tag)) + tag, "Fan: fourth"] if plan == "free"
                                      else ["Fan: first", "Fan: second", "x" * 2000, "Fan: fourth"])

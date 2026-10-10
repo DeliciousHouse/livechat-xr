@@ -73,6 +73,8 @@ Your stream chat goes to a Discord channel. Discord and the Quest notification s
 
 ## How to make a Discord webhook
 
+After a TikTok connection ends, the PC app saves a short session summary; with a Discord webhook configured it also posts that summary and shows it once as a banner. The hosted relay posts a summary when TikTok or YouTube reports going offline, including observed comments, distinct chatters and gift/support events, plus TikTok peak viewers and new follows when available. Unknown fields are omitted; these are connection-local observations, not the platform's full analytics. Twitch IRC provides no stream-end signal, so Twitch end summaries are not available. This summary is included without a new paid gate; relay totals are stored privately in `sessions.jsonl`, without chat text or chatter identities.
+
 A webhook is a private address that lets LiveChat XR post messages to one Discord channel. It is not your Discord password, a server invite or a channel link. Anyone with the address can post there, so treat it like a password.
 
 1. In Discord desktop or web, open a server you own and make a text channel for stream chat. Phone apps may not expose webhook administration; use Discord web/desktop if the option is missing.
