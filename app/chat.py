@@ -19,11 +19,12 @@ from pathlib import Path
 
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
-    "chat": {"tiktok": "", "twitch": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": "",
-             "follow_ask": "follow for the next sword-only run"},
+    "chat": {"tiktok": "", "twitch": "", "youtube": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "",
+             "discord_webhook": "", "follow_ask": "follow for the next sword-only run"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
+PLATFORMS = ("tiktok", "twitch", "youtube")
 log = logging.getLogger("livechatxr")
 
 
@@ -41,8 +42,8 @@ def load_config(portable: bool = False) -> configparser.ConfigParser:
 
 
 def channels(cp: configparser.ConfigParser) -> dict[str, str]:
-    """{platform: channel} for each platform set in [chat]; both chats share one banner / Discord channel."""
-    return {p: cp["chat"][p].strip() for p in ("tiktok", "twitch") if cp["chat"].get(p, "").strip()}
+    """{platform: channel} for each platform set in [chat]; all chats share one banner / Discord channel."""
+    return {p: cp["chat"][p].strip() for p in PLATFORMS if cp["chat"].get(p, "").strip()}
 
 
 def save_config(cp: configparser.ConfigParser) -> None:
@@ -285,14 +286,151 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         await asyncio.sleep(retry)
 
 
+# ---------------------------------------------------------------- YouTube (unofficial; the live page's own chat endpoint, no key, no login)
+_YT_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+               "Accept-Language": "en-US,en;q=0.9"}
+_YT_PAID = {"liveChatPaidMessageRenderer", "liveChatPaidStickerRenderer"}
+_YT_MEMBER = {"liveChatMembershipItemRenderer", "liveChatSponsorshipsGiftPurchaseAnnouncementRenderer"}
+
+
+def _yt_text(obj) -> str:
+    """YouTube text: {"simpleText": s} or {"runs": [{"text": s} | {"emoji": {...}}]}; emoji as the character or :shortcut:."""
+    if not obj:
+        return ""
+    if "simpleText" in obj:
+        return obj["simpleText"]
+    out = []
+    for r in obj.get("runs", ()):
+        if "emoji" in r:
+            e = r["emoji"]
+            out.append((e.get("shortcuts") or [""])[0] if e.get("isCustomEmoji") else e.get("emojiId", ""))
+        else:
+            out.append(r.get("text", ""))
+    return "".join(out)
+
+
+def youtube_line(item: dict, owner: str = "") -> str | None:
+    """One addChatItemAction item -> banner line: chat, Super Chats / stickers and memberships (GIFT). None otherwise."""
+    for kind, r in item.items():
+        header = r.get("header", {}).get("liveChatSponsorshipsHeaderRenderer", {})
+        name = _yt_text(r.get("authorName") or header.get("authorName")) or "?"
+        msg = _yt_text(r.get("message"))
+        if kind == "liveChatTextMessageRenderer":
+            return None if owner and r.get("authorExternalChannelId") == owner else f"{name}: {msg}"
+        if kind in _YT_PAID:
+            return f"{GIFT}{name} sent {_yt_text(r.get('purchaseAmountText')) or 'a Super Chat'}" + (f": {msg}" if msg else "")
+        if kind in _YT_MEMBER:
+            text =_yt_text(header.get("primaryText")) or _yt_text(r.get("headerSubtext")) or _yt_text(r.get("headerPrimaryText"))
+            return GIFT + (text if text.lower().startswith(name.lower()) else f"{name}: {text or 'new member'}")
+    return None
+
+
+def yt_page(html_text: str) -> dict | None:
+    """Live page -> {key, version, continuation, owner}, or None when the channel is not live right now."""
+    if not re.search(r'"isLive(?:Now)?":true', html_text):
+        return None
+    key = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_text)
+    cont = re.search(r'"liveChatRenderer":\{.{0,600}?"continuation":"([^"]+)"', html_text, re.S)
+    if not (key and cont):
+        return None
+    ver = re.search(r'"INNERTUBE_CLIENT_VERSION":"([^"]+)"', html_text)
+    owner = re.search(r'"channelId":"(UC[\w-]{22})"', html_text)
+    return {"key": key[1], "version": ver[1] if ver else "2.20240101.00.00", "continuation": cont[1], "owner": owner[1] if owner else ""}
+
+
+def yt_items(lc: dict):
+    """(id, item) for every chat item added in one get_live_chat response."""
+    for a in lc.get("actions", ()):
+        item = a.get("addChatItemAction", {}).get("item", {})
+        for r in item.values():
+            if r.get("id"):
+                yield r["id"], item
+
+
+def yt_next(lc: dict) -> tuple[str, float] | None:
+    """(next continuation, seconds to wait) from a response; None when the stream has ended (replay continuation)."""
+    for c in lc.get("continuations", ()):
+        for kind, d in c.items():
+            if kind == "liveChatReplayContinuationData":
+                return None
+            if d.get("continuation"):
+                return d["continuation"], min(max(int(d.get("timeoutMs", 5000)) / 1000, 1), 30)
+    return None
+
+
+def yt_all_chat(lc: dict) -> str | None:
+    """The "Live chat" (all messages) continuation when the current view is "Top chat", which hides messages."""
+    sel = lc.get("header", {}).get("liveChatHeaderRenderer", {}).get("viewSelector", {}).get("sortFilterSubMenuRenderer", {})
+    for s in sel.get("subMenuItems", ()):
+        if not s.get("selected") and s.get("title") == "Live chat":
+            return s.get("continuation", {}).get("reloadContinuationData", {}).get("continuation")
+    return None
+
+
+def _yt_get(url: str) -> str:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=_YT_HEADERS), timeout=15) as r:
+        return r.read(3_000_000).decode("utf-8", "replace")
+
+
+def _yt_chat(info: dict, continuation: str) -> dict:
+    body = json.dumps({"context": {"client": {"clientName": "WEB", "clientVersion": info["version"], "hl": "en"}},
+                       "continuation": continuation}).encode()
+    req = urllib.request.Request(f"https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key={info['key']}&prettyPrint=false",
+                                 body, {**_YT_HEADERS, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r).get("continuationContents", {}).get("liveChatContinuation", {})
+
+
+async def youtube(handle: str, emit, status) -> None:
+    """Chat of the channel's current live stream, read the way the live page itself does (no API key, no login).
+    The backlog YouTube sends on (re)connect is skipped so the banner never replays old chat."""
+    handle = handle.strip().lstrip("@")
+    while True:
+        try:
+            info = yt_page(await asyncio.to_thread(_yt_get, f"https://www.youtube.com/@{handle}/live"))
+            if not info:
+                status(f"YouTube: waiting for @{handle} to go live")
+                await asyncio.sleep(60)
+                continue
+            status(f"YouTube: connected to @{handle}")
+            cont, seen, backlog, switched = info["continuation"], {}, True, False
+            while True:
+                lc = await asyncio.to_thread(_yt_chat, info, cont)
+                if not switched and (all_chat := yt_all_chat(lc)):
+                    cont, switched = all_chat, True  # the page's continuation is the filtered "Top chat"; switch once
+                    continue
+                for item_id, item in yt_items(lc):
+                    if item_id in seen:
+                        continue
+                    seen[item_id] = None
+                    if not backlog and (line := youtube_line(item, info["owner"])):
+                        emit(line)
+                while len(seen) > 4000:  # ids only matter across one response boundary
+                    del seen[next(iter(seen))]
+                backlog = False
+                nxt = yt_next(lc)
+                if nxt is None:
+                    status(f"YouTube: @{handle} went offline, waiting")
+                    await asyncio.sleep(60)
+                    break
+                cont, wait = nxt
+                await asyncio.sleep(wait)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            status(f"YouTube: retrying ({e.__class__.__name__})")
+            log.warning("youtube: %r", e)
+            await asyncio.sleep(30)
+
+
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
                 sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
-    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either sort
-    before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
+    channels={"tiktok": "@a", "twitch": "b", "youtube": "@c"} reads all of them into the same batches (gifts from any
+    sort before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
     follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None."""
     queue: list[str] = []
     channels = channels or {platform: channel}
@@ -301,8 +439,11 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
     def source(p: str, c: str):
         def st(s: str) -> None:
             statuses[p] = s
-            status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: …"
-        return tiktok(c.strip(), queue.append, st, sign_api_key, follow_ask) if p.lower() == "tiktok" else twitch(c.strip(), queue.append, st)
+            status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: … · YouTube: …"
+        p, c = p.lower(), c.strip()
+        if p == "tiktok":
+            return tiktok(c, queue.append, st, sign_api_key, follow_ask)
+        return youtube(c, queue.append, st) if p == "youtube" else twitch(c, queue.append, st)
 
     srcs = [asyncio.ensure_future(source(p, c)) for p, c in channels.items()]
     try:
@@ -383,19 +524,20 @@ class Runner:
 # ---------------------------------------------------------------- headless (no tray, no overlay)
 # For a standalone headset: run this in Termux on the Quest (or on any phone/Mac/Linux box) and chat
 # goes to your Discord channel, which the Quest's Discord app pops up in-game. No PC needed.
-#   python chat.py tiktok <handle> <discord webhook URL>      (or: twitch <channel> <webhook>)
+#   python chat.py tiktok <handle> <discord webhook URL>      (or: twitch <channel> <webhook>, youtube <handle> <webhook>)
 # With no arguments it uses ~/LiveChatXR/config.ini (or %LOCALAPPDATA% on Windows).
 if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     cfg = load_config()
-    if len(sys.argv) == 4 and sys.argv[1] in ("tiktok", "twitch"):
-        cfg["chat"]["tiktok"] = cfg["chat"]["twitch"] = ""
+    if len(sys.argv) == 4 and sys.argv[1] in PLATFORMS:
+        for p in PLATFORMS:
+            cfg["chat"][p] = ""
         cfg["chat"][sys.argv[1]], cfg["chat"]["discord_webhook"] = sys.argv[2:]
     elif len(sys.argv) != 1:
-        sys.exit("usage: python chat.py [tiktok|twitch <channel> <discord webhook URL>]")
+        sys.exit("usage: python chat.py [tiktok|twitch|youtube <channel> <discord webhook URL>]")
     if not channels(cfg):
-        sys.exit("no channel set: pass  tiktok|twitch <channel> <webhook>  (or set [chat] tiktok / twitch in config.ini)")
+        sys.exit("no channel set: pass  tiktok|twitch|youtube <channel> <webhook>  (or set [chat] tiktok / twitch / youtube in config.ini)")
     try:
         asyncio.run(Runner()._main(cfg))
     except KeyboardInterrupt:

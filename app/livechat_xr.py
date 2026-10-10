@@ -24,6 +24,7 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 FIELDS = [  # (section, key, label)
     ("chat", "tiktok", "TikTok handle (optional)"),
     ("chat", "twitch", "Twitch channel (optional)"),
+    ("chat", "youtube", "YouTube handle (optional)"),
     ("games", "exes", "Games (exe names, comma-separated)"),
     ("banner", "seconds", "Seconds on screen"),
     ("banner", "max_lines", "Comments per banner"),
@@ -120,7 +121,7 @@ class App:
         w.resizable(False, False)
         f = ttk.Frame(w, padding=14)
         f.grid()
-        ttk.Label(f, text="Fill in one or both: chat from both platforms shares the banner.",
+        ttk.Label(f, text="Fill in any of TikTok, Twitch and YouTube: chat from all of them shares the banner.",
                   foreground="#666").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
         self.vars = {}
         for i, (sec, key, label) in enumerate(FIELDS, start=1):
