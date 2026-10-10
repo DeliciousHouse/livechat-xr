@@ -377,6 +377,16 @@ class Server(unittest.TestCase):
         self.assertIn("Stop and delete", body)
         self.assertIn('href="/privacy"', urllib.request.urlopen(self.base + "/").read().decode())
 
+    def test_home_discord_installation_prerequisite(self):
+        with urllib.request.urlopen(self.base + "/") as response:
+            self.assertEqual(response.status, 200)
+            body = response.read().decode()
+        self.assertIn('<p class="sub" data-pretext>TikTok LIVE, Twitch, YouTube or any mix. '
+                      'No PC needed. Requires Discord on your Quest.</p>', body)
+        self.assertIn('<p data-pretext>Install Discord on your Quest if you have not already, '
+                      'open the channel, and set notifications to <b>All Messages</b>.</p>', body)
+        self.assertNotIn("nothing to install", body)
+
     def test_home_assets(self):
         home = urllib.request.urlopen(self.base + "/").read().decode()
         self.assertIn('import { prepare, layout } from "/pretext.js"', home)

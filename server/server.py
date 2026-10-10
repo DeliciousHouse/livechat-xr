@@ -360,7 +360,7 @@ DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" ari
 # The Quest shows a stock Meta notification from the Discord app (no custom styling); the body is one chat.batch().
 HOME = """<div class="hero">
 <h1 data-pretext>Stream chat on your Quest, <em>through Discord.</em></h1>
-<p class="sub" data-pretext>TikTok LIVE, Twitch, YouTube or any mix. No PC, nothing to install on the headset.</p>
+<p class="sub" data-pretext>TikTok LIVE, Twitch, YouTube or any mix. No PC needed. Requires Discord on your Quest.</p>
 <figure style="margin:0"><div class="qn" role="img" aria-label="Example Quest notification from Discord in #stream-chat: Sam sent Rose x10, BigFan: nice shot!, Mike: GG, plus 2 more">
 <div class="ic" aria-hidden="true">{icon}</div><div aria-hidden="true"><div class="hd"><b>Discord</b><span>now</span></div>
 <div class="ti">#stream-chat · LiveChat XR</div><div class="bd">🎁 Sam sent Rose x10
@@ -390,7 +390,7 @@ maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>
 </div></section>
 <section class="step later" aria-labelledby="s3"><div class="n" aria-hidden="true">3</div><div><h2 id="s3">On your Quest</h2>
-<p data-pretext>Install Discord, open the channel, set notifications to <b>All Messages</b>.</p></div></section>
+<p data-pretext>Install Discord on your Quest if you have not already, open the channel, and set notifications to <b>All Messages</b>.</p></div></section>
 </form>
 <footer>Your name and email are only used to know who is using it.{ga_note} Your webhook URL is only used to post your chat.
 Mentions are disabled, so chat can't ping anyone.<br><a href="https://github.com/DeliciousHouse/livechat-xr">Open source on GitHub</a> ·
