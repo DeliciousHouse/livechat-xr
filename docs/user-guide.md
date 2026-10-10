@@ -37,6 +37,8 @@ Start your PCVR game. Right-click the tray icon and choose **Send test banner**.
 
 Next, go live on your chosen platform and have someone else post a comment. Your own normal comments are skipped. New comments share one banner; gifts/support are gold. More than three selected lines become a `+N more` summary, and long text can be clipped. This is a quick glance at chat, not a full chat log.
 
+**Show LiveChat XR tag** is on by default (`[chat] show_tag = true` in `config.ini`). Each connection shows `LiveChat XR - livechat.deliciouswines.org` through the normal fading banner. TikTok follow asks end with `  - LiveChat XR`; gifts and comments are unchanged. Uncheck it in Settings and Save to disable both banner tags.
+
 ### What you set up
 
 The app reads stream chat; the VR layer draws it inside the chosen PC game. Restart the game after changing Games, placement or duration. Keep the tray app running. **Quit** stops new chat updates. To remove the layer, uninstall LiveChat XR through Windows Apps. Only use it with games that permit third-party OpenXR overlays; anti-cheat compatibility is not guaranteed.
@@ -71,6 +73,8 @@ Your stream chat goes to a Discord channel. Discord and the Quest notification s
 
 ## How to make a Discord webhook
 
+After a TikTok connection ends, the PC app saves a short session summary; with a Discord webhook configured it also posts that summary and shows it once as a banner. The hosted relay posts a summary when TikTok or YouTube reports going offline, including observed comments, distinct chatters and gift/support events, plus TikTok peak viewers and new follows when available. Unknown fields are omitted; these are connection-local observations, not the platform's full analytics. Twitch IRC provides no stream-end signal, so Twitch end summaries are not available. This summary is included without a new paid gate; relay totals are stored privately in `sessions.jsonl`, without chat text or chatter identities.
+
 A webhook is a private address that lets LiveChat XR post messages to one Discord channel. It is not your Discord password, a server invite or a channel link. Anyone with the address can post there, so treat it like a password.
 
 1. In Discord desktop or web, open a server you own and make a text channel for stream chat. Phone apps may not expose webhook administration; use Discord web/desktop if the option is missing.
@@ -89,6 +93,8 @@ On the hosted relay, return to signup with the **same manual Discord webhook**, 
 ## Pricing and billing
 
 The hosted relay's first **five available free registrations** are free; after that it offers **$3 per month** or **$25 per year**. A free slot is per registration/webhook, not a coupon or five free messages. The code counts currently active free registrations, so deleting one frees a slot. An existing free registration stays free when updated with the same webhook. Availability is determined when connecting; the manage page tells you whether payment is needed. The service also has a total capacity limit and can say it is full.
+
+Free relay registrations append `via LiveChat XR - livechat.deliciouswines.org` as one extra line on the first chat batch after a source connects, including reconnects. Later batches are unchanged; paid registrations have no tag. No extra Discord post is sent just for the tag.
 
 If you are waiting for payment, use a plan link **on your private manage page** so Stripe can match payment to that connection. Refresh the page after payment. Do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. These prices apply to the hosted relay, not a subscription gate in the PC app.
 

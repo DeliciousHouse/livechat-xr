@@ -11,6 +11,13 @@ import chat  # noqa: E402
 
 
 class Batch(unittest.TestCase):
+    def test_tag_only_follow_asks(self):
+        lines = ["Fan: hi", chat.GIFT + "Fan sent Rose", chat.ASK + "follow me"]
+        self.assertEqual(chat.batch(lines, show_tag=True),
+                         "» follow me  - LiveChat XR\n🎁 Fan sent Rose\nFan: hi")
+        self.assertEqual(chat.batch(lines, show_tag=False),
+                         "» follow me\n🎁 Fan sent Rose\nFan: hi")
+
     def test_single(self):
         self.assertEqual(chat.batch(["a: 1"]), "a: 1")
 
@@ -61,10 +68,14 @@ class Twitch(unittest.TestCase):
 
     def test_skips_streamer_and_emits_others(self):
         lines = [b"@display-name=Viewer :viewer!viewer@v PRIVMSG #chan :gg\r\n",
+                 "@display-name=🎁\\sRenamed :viewer!viewer@v PRIVMSG #chan :again\r\n".encode(),
+                 b"@bits=100 :viewer!viewer@v PRIVMSG #chan :Cheer100\r\n",
+                 b"@msg-id=resub :tmi.twitch.tv USERNOTICE #chan\r\n",
                  b":chan!chan@c PRIVMSG #chan :my own message\r\n", b""]
         reader = mock.Mock(readline=mock.AsyncMock(side_effect=lines))
         writer = mock.Mock(drain=mock.AsyncMock())
         out, sleeps = [], []
+        tally = chat.Tally("twitch", "chan")
 
         async def stop_after_first(_):
             sleeps.append(1)
@@ -73,8 +84,11 @@ class Twitch(unittest.TestCase):
         with mock.patch("asyncio.open_connection", mock.AsyncMock(return_value=(reader, writer))), \
                 mock.patch("asyncio.sleep", stop_after_first):
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(chat.twitch("#Chan", out.append, lambda s: None))
-        self.assertEqual(out, ["Viewer: gg"])
+                asyncio.run(chat.twitch("#Chan", out.append, lambda s: None, tally))
+        self.assertEqual(out, ["Viewer: gg", "🎁 Renamed: again", "🎁 viewer cheered 100 bits: Cheer100", "🎁 tmi.twitch.tv: resub"])
+        self.assertEqual((tally.comments, len(tally.chatters), tally.gifts), (2, 1, 2))
+        self.assertIsNone(tally.row()["new_follows"])
+        self.assertIsNone(tally.row()["peak_viewers"])
         self.assertIn(b"JOIN #chan", writer.write.call_args_list[0].args[0])
 
 
@@ -101,7 +115,7 @@ class TikTok(unittest.TestCase):
 
     def test_gifts_and_comments(self):
         """Fake TikTokLiveClient that replays events through the handlers chat.tiktok registers."""
-        from TikTokLive.events import CommentEvent, GiftEvent
+        from TikTokLive.events import CommentEvent, GiftEvent, FollowEvent, RoomUserSeqEvent
 
         def ev(cls, **kw):
             e = mock.Mock(spec=cls, **kw)
@@ -112,6 +126,10 @@ class TikTok(unittest.TestCase):
         gift = mock.Mock()
         gift.name = "Rose"
         events = [
+            (FollowEvent, ev(FollowEvent, user=user("viewer", "Viewer"))),
+            (FollowEvent, ev(FollowEvent, user=user("viewer", "Viewer"))),
+            (RoomUserSeqEvent, ev(RoomUserSeqEvent, total=9)),
+            (RoomUserSeqEvent, ev(RoomUserSeqEvent, total=4)),
             (CommentEvent, ev(CommentEvent, user=user("viewer", "Viewer"), comment="hi")),
             (CommentEvent, ev(CommentEvent, user=user("Me", "Me"), comment="own message")),
             (GiftEvent, ev(GiftEvent, user=user("fan", "Fan"), gift=gift, streaking=True, repeat_count=3)),
@@ -134,12 +152,48 @@ class TikTok(unittest.TestCase):
 
         out = []
         with mock.patch("TikTokLive.TikTokLiveClient", FakeClient):
+            tally = chat.Tally("tiktok", "me")
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(chat.tiktok("@me", out.append, lambda s: None))
+                asyncio.run(chat.tiktok("@me", out.append, lambda s: None, tally=tally))
         self.assertEqual(out, ["Viewer: hi", "🎁 Fan sent Rose x5", "🎁 One sent Rose"])
+        self.assertEqual((tally.comments, len(tally.chatters), tally.gifts, tally.peak, len(tally.followers)), (1, 1, 2, 9, 1))
 
 
 class Relay(unittest.TestCase):
+    def test_runner_tag_on_each_connection_and_opt_out(self):
+        async def source(channel, emit, status, key="", ask=None):
+            status(f"{platform}: connected to qa")
+            status(f"{platform}: connected to qa")  # not another connection
+            emit(chat.ASK + "follow me")
+            emit("Fan: hi")
+            await asyncio.sleep(0.03)
+            status(f"{platform}: reconnecting (ConnectionError)")
+            status(f"{platform}: connected to qa")
+            await asyncio.sleep(3600)
+
+        for platform, enabled in [(p, e) for p in chat.PLATFORMS for e in (True, False)]:
+            with self.subTest(platform=platform, enabled=enabled), tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(chat, "DIR", Path(d)), mock.patch.object(chat, platform, source), \
+                    mock.patch.object(chat, "write_banner") as banner, mock.patch.object(chat, "post_discord") as discord:
+                cfg = chat.load_config()
+                self.assertTrue(cfg.getboolean("chat", "show_tag"))
+                cfg["chat"][platform], cfg["chat"]["show_tag"] = "qa", str(enabled)
+                cfg["banner"]["seconds"] = "0.01"
+
+                async def go():
+                    task = asyncio.create_task(chat.Runner()._main(cfg))
+                    await asyncio.sleep(0.07)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+
+                asyncio.run(go())
+                texts = [c.args[0] for c in banner.call_args_list]
+                intro = "LiveChat XR - livechat.deliciouswines.org"
+                self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\nFan: hi", intro] if enabled
+                                 else ["» follow me\nFan: hi"])
+                discord.assert_not_called()
+
     def run_relay(self, channels, fake_tiktok, fake_twitch, seconds=0.05, wait=0.2):
         batches, statuses = [], []
 
@@ -258,13 +312,16 @@ class YouTube(unittest.TestCase):
         top_header = {"liveChatHeaderRenderer": {"viewSelector": {"sortFilterSubMenuRenderer": {"subMenuItems": [
             {"title": "Live chat", "selected": False, "continuation": {"reloadContinuationData": {"continuation": "ALL"}}}]}}}}
         old, new1, new2 = (_yt("liveChatTextMessageRenderer", n, n, id=n) for n in ("old", "new1", "new2"))
+        new2["liveChatTextMessageRenderer"]["authorName"] = {"simpleText": "🎁 new2"}
+        paid = _yt("liveChatPaidMessageRenderer", "Supporter", "gg", id="paid")
         responses = {"CONT1": {**act(old), **nxt("X"), "header": top_header},
                      "ALL": {**act(old, _yt("liveChatTextMessageRenderer", "old2", "old2", id="old2")), **nxt("C2")},
                      "C2": {**act(old, new1), **nxt("C3")},
-                     "C3": {**act(new1, new2), "continuations": [{"liveChatReplayContinuationData": {"continuation": "R"}}]}}
+                     "C3": {**act(new1, new2, paid), "continuations": [{"liveChatReplayContinuationData": {"continuation": "R"}}]}}
         pages = iter(['"nothing live here"', 'x "INNERTUBE_API_KEY":"K" "isLive":true "liveChatRenderer":{"continuations":'
                       '[{"reloadContinuationData":{"continuation":"CONT1"}}]}'])
         out, statuses, sleeps = [], [], []
+        tally = chat.Tally("youtube", "Me")
 
         async def sleep(s):
             sleeps.append(s)
@@ -274,8 +331,9 @@ class YouTube(unittest.TestCase):
         with mock.patch.object(chat, "_yt_get", lambda url: next(pages)), \
                 mock.patch.object(chat, "_yt_chat", lambda info, c: responses[c]), mock.patch("asyncio.sleep", sleep):
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(chat.youtube("@Me", out.append, statuses.append))
-        self.assertEqual(out, ["new1: new1", "new2: new2"])
+                asyncio.run(chat.youtube("@Me", out.append, statuses.append, tally))
+        self.assertEqual(out, ["new1: new1", "🎁 new2: new2", "🎁 Supporter sent a Super Chat: gg"])
+        self.assertEqual((tally.comments, len(tally.chatters), tally.gifts), (2, 2, 1))
         self.assertEqual(sleeps, [60, 1, 1, 60])
         self.assertEqual(statuses, ["YouTube: waiting for @Me to go live", "YouTube: connected to @Me", "YouTube: @Me went offline, waiting"])
 
