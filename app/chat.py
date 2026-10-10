@@ -54,12 +54,12 @@ def save_config(cp: configparser.ConfigParser) -> None:
 
 
 GIFT = "🎁 "  # the layer draws lines starting with this in gold
-ASK = "» "  # follow-ask lines; batch() keeps them with gifts so "+N more" never hides them
+ASK = "» "  # follow-ask lines take priority over gifts and comments
 
 
 def batch(lines: list[str], max_lines: int = 3) -> str:
-    """Merge queued lines into one banner; gifts go first so they never end up in "+N more"."""
-    lines = sorted(lines, key=lambda line: not line.startswith((GIFT, ASK)))  # stable: keeps arrival order
+    """Merge queued lines into one banner: follow asks, gifts, then comments, up to max_lines."""
+    lines = sorted(lines, key=lambda line: (not line.startswith(ASK), not line.startswith(GIFT)))
     shown = lines[:max_lines]
     extra = len(lines) - len(shown)
     return "\n".join(shown) + (f"\n+{extra} more" if extra else "")
@@ -291,8 +291,8 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
-    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either still sort
-    first); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
+    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either sort
+    before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
     follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None."""
     queue: list[str] = []
     channels = channels or {platform: channel}

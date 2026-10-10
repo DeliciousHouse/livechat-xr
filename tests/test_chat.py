@@ -244,6 +244,20 @@ class FollowAsk(unittest.TestCase):
         lines = ["a: 1", "b: 2", "c: 3", "d: 4", "» " + self.ASK]
         self.assertEqual(chat.batch(lines), "» " + self.ASK + "\na: 1\nb: 2\n+2 more")
 
+    def test_ask_line_survives_gift_overflow(self):
+        s = chat.Session(self.ASK)
+        s.comment("a", False, 0)
+        ask = s.comment("a", False, 1)
+        gifts = [chat.GIFT + name for name in "abc"]
+        for max_lines in (1, 3):
+            for lines in (gifts + [ask], [gifts[0], ask] + gifts[1:]):
+                with self.subTest(max_lines=max_lines, lines=lines):
+                    shown = [ask] + gifts[:max_lines - 1]
+                    self.assertEqual(chat.batch(lines, max_lines),
+                                     "\n".join(shown) + f"\n+{4 - max_lines} more")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
+            self.assertEqual(s.save("me")["asks_shown"], 1)
+
     def replay(self, follow_ask):
         """Fake TikTokLiveClient replays a stream through chat.tiktok's handlers, then the stream is cancelled."""
         from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, RoomUserSeqEvent

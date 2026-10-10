@@ -58,7 +58,7 @@ Set a real channel in Settings before connecting. This blank-channel example is 
 
 - Normal streamer comments are skipped. TikTok gift combos emit their final count. Twitch Bits and selected sub/resub/gift notices are supported; mass gifts suppress their individual notices.
 - `follow_ask=None` (the hosted relay) disables the follow ask and `sessions.jsonl`; the PC app passes `chat / follow_ask`.
-- Gift and follow-ask lines sort before normal comments, stably within each group. At most `max_lines` lines are selected, followed by `+N more` when needed. Even gifts can exceed that limit; not every gift is guaranteed visible.
+- Follow-ask lines sort first, then gifts, then normal comments, stably within each group. At most `max_lines` lines are selected, followed by `+N more` when needed. A single ask survives gift overflow when `max_lines` is at least 1. If asks alone exceed that limit, later asks also fold into `+N more`; not every gift or ask is guaranteed visible in that case.
 - Twitch uses anonymous TLS IRC, reconnecting after errors in 10 seconds. No Twitch password or key is requested.
 - TikTok uses unofficial TikTokLive 7.0.1 and its signing service. Normal retries are 60 seconds; five consecutive account-not-found failures raise that to 1800 seconds. Connection, an offline result or a different error resets the count. Account-not-found can also mean no LIVE permission.
 - `post_discord(webhook, text)` returns a bool, truncates content to 2000 characters, sets `allowed_mentions.parse` to an empty list, and times out after 10 seconds. Failed/rate-limited posts are dropped, not queued for replay.
