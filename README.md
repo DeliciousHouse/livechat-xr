@@ -45,6 +45,7 @@ new line. This works even with the ask turned off. Details: [reference](docs/ref
 | [Architecture](docs/architecture.md) | How the PC layer/app and hosted relay share chat, plus limits and trade-offs |
 | [Development](docs/development.md) | Local environment, tests, empty local relay and verification evidence |
 | [Operations](docs/operations.md) | Dora service map, admin/backup diagnosis and canonical release/deploy runbook ownership |
+| [Roadmap](docs/ROADMAP.md) | Product decisions, phases, gates and backlog |
 | [Contributing](CONTRIBUTING.md) | Scoped changes, draft PRs, tests and safe reports |
 
 ## Safety and support
