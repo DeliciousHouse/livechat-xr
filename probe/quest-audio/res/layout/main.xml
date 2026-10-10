@@ -1,0 +1,17 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical" android:padding="30dp" android:gravity="center_vertical">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Quest Audio Probe" android:textSize="26sp" android:textStyle="bold"
+            android:accessibilityHeading="true" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="16dp" android:layout_marginBottom="22dp" android:textSize="18sp"
+            android:text="Start the numbered speech, then open Population: ONE. Listen to confirm it continues. Return here to Stop. In-game audio is unverified." />
+        <Button android:id="@+id/start" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="56dp" android:text="Start" android:textAllCaps="false" android:backgroundTint="#7c4dff" android:textColor="#ffffff" />
+        <Button android:id="@+id/stop" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:minHeight="56dp" android:text="Stop"
+            android:textAllCaps="false" android:backgroundTint="#2a2536" android:textColor="#eceaf4" />
+    </LinearLayout>
+</ScrollView>
