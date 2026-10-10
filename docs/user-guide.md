@@ -27,7 +27,7 @@ On a fresh setup, Settings opens automatically. If it does not, look for the pur
 
 ![Actual PC Settings window with default values and empty private fields](images/pc-settings.png)
 
-Select **TikTok LIVE** or **Twitch**. For **Channel / username**, enter your actual account handle, not your display name. In the PC app use the bare handle (TikTok also accepts leading `@`; Twitch accepts leading `#`), not a profile URL.
+Enter your **TikTok handle**, your **Twitch channel**, or both; chat from both shows in the same banner. Use your actual account handle, not your display name. In the PC app use the bare handle (TikTok also accepts leading `@`; Twitch accepts leading `#`), not a profile URL.
 
 For Population: ONE, leave **Games** as `PopulationONE.exe` if that matches your installed game's process. For another game, open Windows Task Manager while it runs, choose **Details**, and copy the executable name including `.exe`. Separate multiple games with commas. Leave placement and timing at their defaults for your first test. Leave both optional private fields empty for overlay-only use. Select **Start with Windows** if desired, then **Save**.
 
@@ -51,7 +51,7 @@ Use a private Discord server and a text channel such as `stream-chat`. If you ar
 
 ### Step 2: Connect your channel
 
-Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Select TikTok LIVE or Twitch, then enter your handle. Here, unlike the PC app, a full TikTok/Twitch profile URL is also accepted; leading `@` is optional.
+Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Enter your TikTok handle, your Twitch channel, or both: chat from both lands in the same Discord channel. Here, unlike the PC app, a full TikTok/Twitch profile URL is also accepted; leading `@` is optional.
 
 ![Public relay signup page, empty fields](images/relay-signup.png)
 

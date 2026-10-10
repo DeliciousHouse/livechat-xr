@@ -49,6 +49,7 @@ GOOGLE_ID = os.environ.get("GOOGLE_CLIENT_ID", "")  # optional "Continue with Go
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$")}
+LABEL = {"tiktok": "TikTok", "twitch": "Twitch"}
 log = logging.getLogger("relay")
 
 regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created,
@@ -107,6 +108,15 @@ loop = asyncio.new_event_loop()
 
 def save() -> None:
     write_json("registrations.json", regs)
+
+
+def channels(r: dict) -> dict[str, str]:
+    """{platform: channel} for a registration; pre-0.2 records only have the single platform/channel pair."""
+    return r.get("channels") or {r["platform"]: r["channel"]}
+
+
+def channel_label(r: dict) -> str:
+    return " · ".join(f"{LABEL[p]} {c}" for p, c in channels(r).items())
 
 
 def plan(r: dict) -> str:
@@ -196,17 +206,17 @@ async def run(token: str, delay: float = 0) -> None:
 
     def on_status(s: str) -> None:
         if status.get(token) != s:
-            log.info("%s: %s", r["channel"], s)
+            log.info("%s: %s", channel_label(r), s)
         status[token] = s
 
     while True:
         try:
-            await chat.relay(r["platform"], r["channel"], on_batch, on_status)
+            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r))
         except asyncio.CancelledError:
             raise
         except Exception as e:
             on_status(f"error, retrying ({type(e).__name__})")
-            log.warning("%s: %r", r["channel"], e)
+            log.warning("%s: %r", channel_label(r), e)
             await asyncio.sleep(60)
 
 
@@ -237,7 +247,6 @@ CSS = """
 body{margin:0;font:400 16px/1.55 var(--font);background:var(--bg);color:var(--text)}
 a{color:var(--link)}
 :focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:6px}
-.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .site{display:flex;justify-content:space-between;align-items:center;max-width:1080px;margin:0 auto;padding:22px 24px;font-size:15px}
 .brand{font-weight:800;color:var(--text);text-decoration:none}
 .site nav a{color:var(--label);text-decoration:none;margin-left:18px}
@@ -268,13 +277,7 @@ color:#f2f2f2;font:400 14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;bo
 .n{width:38px;height:38px;border-radius:12px;background:var(--accent);color:#1a1300;display:grid;place-items:center;font-weight:800;font-size:17px}
 .step.later .n{background:var(--line);color:var(--accent)}
 .step p{margin:0;color:var(--text-2)}
-fieldset{border:0;margin:0;padding:0;min-width:0}
 label{display:block;font-size:13px;font-weight:600;color:var(--label);margin:12px 0 6px}
-.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px;background:var(--bg);border:1px solid var(--line-field);border-radius:12px;padding:4px}
-.seg input{position:absolute;opacity:0;pointer-events:none}
-.seg label{margin:0;padding:10px;border-radius:9px;text-align:center;font-size:15px;font-weight:700;color:var(--label);cursor:pointer}
-.seg input:checked+label{background:var(--text);color:var(--surface)}
-.seg input:focus-visible+label{outline:3px solid var(--focus);outline-offset:1px}
 input[type=text],input[type=email],input[type=url],input:not([type]){width:100%;padding:12px 14px;font:inherit;color:var(--text);
 border:1px solid var(--line-field);border-radius:12px;background:var(--bg)}
 input::placeholder{color:var(--placeholder)}
@@ -318,7 +321,7 @@ DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" ari
 # The Quest shows a stock Meta notification from the Discord app (no custom styling); the body is one chat.batch().
 HOME = """<div class="hero">
 <h1 data-pretext>Stream chat on your Quest, <em>through Discord.</em></h1>
-<p class="sub" data-pretext>TikTok LIVE or Twitch. No PC, nothing to install on the headset.</p>
+<p class="sub" data-pretext>TikTok LIVE, Twitch or both. No PC, nothing to install on the headset.</p>
 <figure style="margin:0"><div class="qn" role="img" aria-label="Example Quest notification from Discord in #stream-chat: Sam sent Rose x10, BigFan: nice shot!, Mike: GG, plus 2 more">
 <div class="ic" aria-hidden="true">{icon}</div><div aria-hidden="true"><div class="hd"><b>Discord</b><span>now</span></div>
 <div class="ti">#stream-chat · LiveChat XR</div><div class="bd">🎁 Sam sent Rose x10
@@ -330,12 +333,11 @@ Mike: GG
 {msg}
 <form class="card" method="post" action="/register" aria-label="Set up LiveChat XR for Discord">
 <section class="step" aria-labelledby="s1"><div class="n" aria-hidden="true">1</div><div><h2 id="s1">Your channel</h2>
-<fieldset><legend class="sr-only">Platform</legend><div class="seg">
-<input type="radio" name="platform" id="p-tiktok" value="tiktok"{tiktok}><label for="p-tiktok">TikTok LIVE</label>
-<input type="radio" name="platform" id="p-twitch" value="twitch"{twitch}><label for="p-twitch">Twitch</label></div></fieldset>
-<label for="channel">Channel</label><input type="text" id="channel" name="channel" value="{channel}" placeholder="@yourhandle or profile URL"
-required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-<div class="hint">Your username or full profile URL; the @ is optional.</div>
+<label for="tiktok">TikTok handle</label><input type="text" id="tiktok" name="tiktok" value="{tiktok}" placeholder="@yourhandle or profile URL"
+maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+<label for="twitch">Twitch channel</label><input type="text" id="twitch" name="twitch" value="{twitch}" placeholder="yourchannel or twitch.tv URL"
+maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+<div class="hint">Fill in one or both: chat from both lands in the same Discord channel.</div>
 {google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
 <div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
 </div></section>
@@ -394,7 +396,7 @@ Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open a
 <p><a href="/">Back</a></p>"""
 
 MANAGE = """<h1>Your chat relay</h1>{msg}
-<div class="box"><b>{platform}:</b> {channel}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
+<div class="box">{channels}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
 <p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
 whenever you go live.</p>
 <div class="actions"><form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form>
@@ -409,7 +411,10 @@ WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input type="u
 
 def home(msg: str = "", form: dict | None = None) -> bytes:
     form = form or {}
-    values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "channel", "webhook")}
+    chans = {p: form.get(p, "") for p in LABEL}
+    if form.get("platform") in LABEL and form.get("channel"):  # older single-platform form
+        chans[form["platform"]] = form["channel"]
+    values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "webhook")} | {p: html.escape(c) for p, c in chans.items()}
     if DISCORD_ID:
         discord = ('<button class="cta" name="via" value="discord">Connect Discord</button><p class="hint">Discord asks which server '
                    'and channel to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</p>'
@@ -431,9 +436,8 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
                   'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
                   'gwho.textContent="Signed in with Google ✔"}</script>')
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
-    twitch = form.get("platform") == "twitch"
     return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note, icon=DISCORD_ICON,
-                            tiktok="" if twitch else " checked", twitch=" checked" if twitch else "", **values) + PRETEXT_JS, ga="/")
+                            **values) + PRETEXT_JS, ga="/")
 
 
 def google_identity(credential: str) -> tuple[str, str]:
@@ -506,7 +510,7 @@ def admin_body() -> str:
         st = stats.get(t, {})
         g = " (Google)" if r.get("signin") == "google" else ""
         rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}{g}</small></td>"
-                    f"<td>{e(r['platform'])} {e(r['channel'])}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
+                    f"<td>{e(channel_label(r))}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
                     f"<td>{plan(r)}</td><td>{e(status.get(t, 'stopped' if plan(r) == 'pending' else ''))}</td>"
                     f"<td>{st.get('posts', 0)}<br><small>{ago(st.get('last_post', 0))}</small></td>"
                     f"<td{' style=color:#ff8a8a' if st.get('fails') else ''}>{st.get('fails', 0)}"
@@ -547,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
         billing, st = "", status.get(token, "starting…")
-        if st.startswith("TikTok: can't find"):
+        if "TikTok: can't find" in st:
             msg += note("To correct your channel, use Set up another channel below with the same Discord webhook. "
                         "This updates your existing registration; no need to delete it.")
         if plan(r) == "pending":
@@ -561,8 +565,8 @@ class Handler(BaseHTTPRequestHandler):
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
         self.send(200, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
-            platform="TikTok" if r["platform"] == "tiktok" else "Twitch",
-            channel=html.escape(r["channel"]), dname=html.escape(r["discord_channel"]),
+            channels="<br>".join(f"<b>{LABEL[p]}:</b> {html.escape(c)}" for p, c in channels(r).items()),
+            dname=html.escape(r["discord_channel"]),
             status=html.escape(st), billing=billing),
             ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else ""))
 
@@ -657,8 +661,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, b"ok")
 
     def register(self, form: dict) -> None:
-        platform = form.get("platform", "")
-        channel = normalise_channel(platform, form.get("channel", ""))
+        wanted = {p: normalise_channel(p, form[p]) for p in LABEL if form.get(p, "").strip()}
+        if not wanted and form.get("platform") in LABEL and form.get("channel", "").strip():  # older single-platform form
+            wanted[form["platform"]] = normalise_channel(form["platform"], form["channel"])
         webhook = form.get("webhook", "")
         err = None
         if form.get("google") and GOOGLE_ID:
@@ -673,25 +678,27 @@ class Handler(BaseHTTPRequestHandler):
             pass
         elif not name or not EMAIL.match(email):
             err = "Please enter your name and a valid email."
-        elif platform not in CHANNEL or not CHANNEL[platform].match(channel):
+        elif not wanted:
+            err = "Enter your TikTok handle, your Twitch channel, or both."
+        elif any(not CHANNEL[p].match(c) for p, c in wanted.items()):
             err = "That channel name doesn't look right."
         if err:
             return self.send(400, home(note(err, True), form))
         channel_note = ""
-        try:
-            exists = check_channel(platform, channel)
-        except Exception as e:
-            log.warning("channel check: %s", type(e).__name__)  # no credentials or remote response in logs
-            exists = None
-        if exists is False:
-            label = "TikTok" if platform == "tiktok" else "Twitch"
-            return self.send(400, home(note(f"We can't find that {label} account. Check the spelling, without the @", True), form))
-        if exists is None:
-            channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
+        for p, c in wanted.items():
+            try:
+                exists = check_channel(p, c)
+            except Exception as e:
+                log.warning("channel check: %s", type(e).__name__)  # no credentials or remote response in logs
+                exists = None
+            if exists is False:
+                return self.send(400, home(note(f"We can't find that {LABEL[p]} account. Check the spelling, without the @", True), form))
+            if exists is None:
+                channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
         if form.get("via") == "discord" and DISCORD_ID:
             state = secrets.token_urlsafe(24)
             with lock:
-                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "platform", "channel", "signin")})
+                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "signin")} | wanted)
             q = urllib.parse.urlencode({"client_id": DISCORD_ID, "response_type": "code", "scope": "webhook.incoming",
                                         "redirect_uri": f"{PUBLIC_URL}/discord/callback", "state": state})
             return self.send(303, b"", location=f"https://discord.com/oauth2/authorize?{q}")
@@ -710,15 +717,16 @@ class Handler(BaseHTTPRequestHandler):
             old = regs.get(token, {}) if token else {}
             token = token or secrets.token_urlsafe(24)
             p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")
-            regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "webhook": webhook,
+            platform, channel = next(iter(wanted.items()))  # primary pair kept for older readers (admin exports, QA tools)
+            regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "channels": wanted, "webhook": webhook,
                            "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p,
                            "signin": form.get("signin") or "email", "channel_note": channel_note}
             save()
         if p == "pending":
-            chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel}: <{manage_url(token)}>")
+            chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel_label(regs[token])}: <{manage_url(token)}>")
         else:
             start(token)
-            chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel} will show up here while you're live.\n"
+            chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel_label(regs[token])} will show up here while you're live.\n"
                                        f"Manage or stop it: <{manage_url(token)}>")
         self.send(303, b"", location=f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
 

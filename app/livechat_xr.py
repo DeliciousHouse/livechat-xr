@@ -22,7 +22,8 @@ import chat
 APP = "LiveChat XR"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 FIELDS = [  # (section, key, label)
-    ("chat", "channel", "Channel / username"),
+    ("chat", "tiktok", "TikTok handle (optional)"),
+    ("chat", "twitch", "Twitch channel (optional)"),
     ("games", "exes", "Games (exe names, comma-separated)"),
     ("banner", "seconds", "Seconds on screen"),
     ("banner", "max_lines", "Comments per banner"),
@@ -88,7 +89,7 @@ class App:
             chat.save_config(self.cfg)  # the layer reads [games]/[banner] from here
         self.icon.run_detached()
         self.runner.start(self.cfg)
-        if self.settings or not self.cfg["chat"]["channel"].strip():
+        if self.settings or not chat.channels(self.cfg):
             self.open_settings()
         self.root.after(200, self.pump)
         self.root.mainloop()
@@ -118,12 +119,8 @@ class App:
         w.resizable(False, False)
         f = ttk.Frame(w, padding=14)
         f.grid()
-        ttk.Label(f, text="Platform").grid(row=0, column=0, sticky="w", pady=3)
-        self.platform = tk.StringVar(value=self.cfg["chat"]["platform"].lower())
-        pf = ttk.Frame(f)
-        pf.grid(row=0, column=1, sticky="w")
-        for val, text in (("twitch", "Twitch"), ("tiktok", "TikTok LIVE")):
-            ttk.Radiobutton(pf, text=text, value=val, variable=self.platform).pack(side="left", padx=(0, 10))
+        ttk.Label(f, text="Fill in one or both: chat from both platforms shares the banner.",
+                  foreground="#666").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
         self.vars = {}
         for i, (sec, key, label) in enumerate(FIELDS, start=1):
             ttk.Label(f, text=label).grid(row=i, column=0, sticky="w", pady=3)
@@ -156,7 +153,6 @@ class App:
                     messagebox.showerror(APP, f"'{val}' is not a valid number for {key}.", parent=self.win)
                     return
             self.cfg[sec][key] = val
-        self.cfg["chat"]["platform"] = self.platform.get()
         chat.save_config(self.cfg)
         if not self.portable:
             set_autostart(self.auto.get())

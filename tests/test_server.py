@@ -156,6 +156,32 @@ class Server(unittest.TestCase):
         self.assertEqual(server.regs, {})
         self.assertEqual(self.post(f"/m/{token}/test")[0], 404)
 
+    def test_both_platforms_in_one_registration(self):
+        code, _, body = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK)
+        self.assertEqual((code, server.regs), (400, {}))
+        self.assertIn("TikTok handle, your Twitch channel, or both", body)
+        code, headers, _ = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK,
+                                     tiktok="https://www.tiktok.com/@Ann.1", twitch=" @SomeOne ")
+        self.assertEqual(code, 303)
+        token = next(iter(server.regs))
+        r = server.regs[token]
+        self.assertEqual(r["channels"], {"tiktok": "@Ann.1", "twitch": "someone"})
+        self.assertEqual((r["platform"], r["channel"]), ("tiktok", "@Ann.1"))  # primary pair for older readers
+        self.assertEqual(self.check_channel.call_args_list, [mock.call("tiktok", "@Ann.1"), mock.call("twitch", "someone")])
+        self.assertIn("TikTok @Ann.1 · Twitch someone", self.posts[-1][1])
+        manage = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        self.assertIn("<b>TikTok:</b> @Ann.1<br><b>Twitch:</b> someone", manage)
+        self.assertIn("TikTok @Ann.1 · Twitch someone", server.admin_body())
+        # a Twitch-only error is reported for Twitch, and both values stay in the form
+        self.check_channel.side_effect = lambda p, c: p != "twitch"
+        code, _, body = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK, tiktok="ann1", twitch="gone")
+        self.assertEqual(code, 400)
+        self.assertIn("find that Twitch account", body)
+        self.assertIn('name="tiktok" value="ann1"', body)
+        self.assertIn('name="twitch" value="gone"', body)
+        # old records without "channels" still resolve
+        self.assertEqual(server.channels({"platform": "twitch", "channel": "old"}), {"twitch": "old"})
+
     def test_missing_channel_keeps_escaped_form_without_saving(self):
         self.check_channel.return_value = False
         code, _, body = self.post("/register", name='Ann "<b>', email="ann@example.com",
@@ -164,9 +190,8 @@ class Server(unittest.TestCase):
         self.assertIn("We can&#x27;t find that Twitch account", body)
         self.assertIn('value="Ann &quot;&lt;b&gt;"', body)
         self.assertIn('value="ann@example.com"', body)
-        self.assertIn('value="missing"', body)
+        self.assertIn('name="twitch" value="missing"', body)  # the old single-platform form lands in the right field
         self.assertIn(f'value="{HOOK}"', body)
-        self.assertIn('value="twitch" checked', body)
         self.assertEqual((server.regs, self.posts, self.started), ({}, [], []))
 
     def test_tiktok_missing_error_before_discord_oauth(self):
@@ -346,7 +371,8 @@ class Server(unittest.TestCase):
     def test_home_assets(self):
         home = urllib.request.urlopen(self.base + "/").read().decode()
         self.assertIn('import { prepare, layout } from "/pretext.js"', home)
-        self.assertIn('value="tiktok" checked', home)  # TikTok is the default platform
+        self.assertIn('name="tiktok" value=""', home)
+        self.assertIn('name="twitch" value=""', home)
         r = urllib.request.urlopen(self.base + "/pretext.js")
         self.assertTrue(r.headers["Content-Type"].startswith("text/javascript"))
         self.assertIn(b"as prepare", r.read())

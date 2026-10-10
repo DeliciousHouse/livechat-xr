@@ -127,7 +127,6 @@ Radius scale sm 9 / md 12 / lg 14 / xl 16 / card 22 / full. Inner elements use a
 
 - **Primary button:** violet, white 800 text, `lg` radius, full width in forms. Hover brightens about 8%, active nudges down 1px, focus-visible shows the violet ring. One per screen.
 - **Secondary button:** `line`-colored fill, no shadow (e.g. "Connect with webhook").
-- **Segmented control:** real radio inputs; checked label inverts to `text` on `surface`; keyboard focus shows the ring on the label.
 - **Input:** `background` fill, `line-field` border, ring plus `focus` border on focus, `placeholder` color for hints.
 - **Stepper card:** numbered gold squares joined by a 2px `line` rail; a step the user does later (on the Quest) gets a muted number.
 - **Quest notification mock:** stock grey card, the real Discord app icon (official white Clyde mark, inline SVG, on a `discord` blurple tile), "Discord / now", channel line, then the batched chat as plain text exactly as `chat.batch()` produces it (up to 3 lines plus "+N more"; gift lines are plain text starting with 🎁).

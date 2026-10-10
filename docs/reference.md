@@ -8,8 +8,9 @@ Stored in `%LOCALAPPDATA%\LiveChatXR\config.ini`. The Python reader overlays sav
 
 | Section / key | Type and default | Effect |
 |---|---|---|
-| chat / platform | string, `twitch` | Settings offers `twitch` and `tiktok`; relay selects TikTok only for `tiktok` (case-insensitive), otherwise Twitch |
-| chat / channel | string, empty | TikTok handle (leading `@` stripped); Twitch channel (leading `#` stripped, lowercased). Use a bare handle in the PC app, not a profile URL |
+| chat / tiktok | string, empty | TikTok handle (leading `@` stripped). Use a bare handle in the PC app, not a profile URL |
+| chat / twitch | string, empty | Twitch channel (leading `#` stripped, lowercased). Set one or both; chat from both shares the banner |
+| chat / platform, chat / channel | legacy | Pre-0.2 single-platform pair. On load the app moves a set `channel` into `tiktok` or `twitch` (by `platform`, case-insensitive) and blanks it |
 | chat / tiktok_sign_api_key | string, empty | Optional TikTokLive signing key; sets `SIGN_API_KEY` in the app process |
 | chat / discord_webhook | string, empty | Optional Discord destination in addition to the PC banner |
 | games / exes | string, `PopulationONE.exe` | Exact executable basenames, case-insensitive. Commas separate entries; layer also accepts semicolons |
@@ -35,8 +36,8 @@ The default overlay-only config can keep secrets empty:
 
 ```ini
 [chat]
-platform = twitch
-channel =
+tiktok =
+twitch =
 tiktok_sign_api_key =
 discord_webhook =
 [games]
@@ -51,7 +52,7 @@ width = 0.62
 
 Set a real channel in Settings before connecting. This blank-channel example is safe to save but does not read a stream.
 
-`app/chat.py` supplies `relay(platform, channel, on_batch, status, seconds=7, max_lines=3, sign_api_key="")`, an async coroutine used by both app and server. `on_batch(text)` receives nonempty windows; `status(text)` receives connection changes.
+`app/chat.py` supplies `relay(platform, channel, on_batch, status, seconds=7, max_lines=3, sign_api_key="", channels=None)`, an async coroutine used by both app and server. `channels={"tiktok": "@a", "twitch": "b"}` reads both platforms into the same windows; without it, `platform`/`channel` is a single source. `on_batch(text)` receives nonempty windows; `status(text)` receives connection changes, joined with ` · ` per platform when there are two.
 
 - Normal streamer comments are skipped. TikTok gift combos emit their final count. Twitch Bits and selected sub/resub/gift notices are supported; mass gifts suppress their individual notices.
 - Gift lines sort before normal comments, stably within each group. At most `max_lines` lines are selected, followed by `+N more` when needed. Even gifts can exceed that limit; not every gift is guaranteed visible.
@@ -88,7 +89,7 @@ Responses are HTML except simple health/Stripe text responses; there is no gener
 | Method / path | Inputs and result |
 |---|---|
 | GET `/` | Signup form |
-| POST `/register` | URL-encoded name, email, platform, channel, webhook; optional `google` credential and `via=discord` or `via=webhook`. 303 to manage on success; 400 validation error; 503 new-registration capacity reached |
+| POST `/register` | URL-encoded name, email, webhook, and `tiktok` and/or `twitch` (the older `platform` + `channel` pair is still accepted); optional `google` credential and `via=discord` or `via=webhook`. 303 to manage on success; 400 validation error; 503 new-registration capacity reached |
 | GET `/discord/callback` | One-use state and code, valid for 900 seconds; exchanges Discord authorization for the selected channel's webhook; 400 on failure |
 | GET `/m/{token}` | Private manage page; 404 absent/deleted registration |
 | POST `/m/{token}/test` | Posts a test even for a pending registration; 404 inactive link. “Test sent” is not a delivery receipt |

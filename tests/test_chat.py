@@ -138,6 +138,69 @@ class TikTok(unittest.TestCase):
         self.assertEqual(out, ["Viewer: hi", "🎁 Fan sent Rose x5", "🎁 One sent Rose"])
 
 
+class Relay(unittest.TestCase):
+    def run_relay(self, channels, fake_tiktok, fake_twitch, seconds=0.05, wait=0.2):
+        batches, statuses = [], []
+
+        async def go():
+            task = asyncio.ensure_future(chat.relay("", "", batches.append, statuses.append, seconds=seconds, channels=channels))
+            await asyncio.sleep(wait)
+            task.cancel()
+            await task
+
+        with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(go())
+        return batches, statuses
+
+    def test_both_platforms_share_batches_and_status(self):
+        async def fake_tiktok(user, emit, status, key=""):
+            status(f"TikTok: connected to @{user}")
+            emit("Fan: hi from tiktok")
+            await asyncio.sleep(3600)
+
+        async def fake_twitch(channel, emit, status):
+            await asyncio.sleep(0.01)
+            status(f"Twitch: connected to #{channel}")
+            emit("🎁 Sub cheered 100 bits")
+            await asyncio.sleep(3600)
+
+        batches, statuses = self.run_relay({"tiktok": "me", "twitch": "chan"}, fake_tiktok, fake_twitch)
+        self.assertEqual(batches, ["🎁 Sub cheered 100 bits\nFan: hi from tiktok"])  # one banner, gift first
+        self.assertEqual(statuses, ["TikTok: connected to @me", "TikTok: connected to @me · Twitch: connected to #chan"])
+
+    def test_one_platform_is_unchanged(self):
+        async def fake_twitch(channel, emit, status):
+            status(f"Twitch: connected to #{channel}")
+            emit("a: 1")
+            await asyncio.sleep(3600)
+
+        batches, statuses = self.run_relay({"twitch": "c"}, None, fake_twitch)
+        self.assertEqual((batches, statuses), (["a: 1"], ["Twitch: connected to #c"]))
+
+    def test_one_source_failing_fails_the_relay(self):
+        async def fake_tiktok(user, emit, status, key=""):
+            await asyncio.sleep(3600)
+
+        async def fake_twitch(channel, emit, status):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(chat.relay("", "", lambda t: None, lambda s: None, seconds=0.01, channels={"tiktok": "a", "twitch": "b"}))
+
+    def test_config_channels_and_migration(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
+            (Path(d) / "config.ini").write_text("[chat]\nplatform = TikTok\nchannel = @old\n", encoding="utf-8")
+            cp = chat.load_config()
+            self.assertEqual(chat.channels(cp), {"tiktok": "@old"})
+            self.assertEqual(cp["chat"]["channel"], "")
+            cp["chat"]["twitch"] = "second"
+            chat.save_config(cp)
+            self.assertEqual(chat.channels(chat.load_config()), {"tiktok": "@old", "twitch": "second"})
+            self.assertEqual(chat.load_config()["chat"]["channel"], "")  # the migrated value does not come back
+
+
 class Discord(unittest.TestCase):
     def test_post_disables_mentions_and_truncates(self):
         sent = {}
@@ -167,9 +230,9 @@ class Files(unittest.TestCase):
             self.assertEqual((Path(d) / "banner.txt").read_text(encoding="utf-8"), "x: ✔")
             cp = chat.load_config()
             self.assertEqual(cp["banner"]["seconds"], "7")
-            cp["chat"]["channel"] = "someone"
+            cp["chat"]["twitch"] = "someone"
             chat.save_config(cp)
-            self.assertEqual(chat.load_config()["chat"]["channel"], "someone")
+            self.assertEqual(chat.load_config()["chat"]["twitch"], "someone")
 
 
 if __name__ == "__main__":
