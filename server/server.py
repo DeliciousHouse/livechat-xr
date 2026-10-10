@@ -220,9 +220,26 @@ async def run(token: str, delay: float = 0) -> None:
             log.info("%s: %s", channel_label(r), s)
         status[token] = s
 
+    def save_session(row: dict) -> None:
+        row = {**row, "registration_id": token}
+        try:
+            with lock:
+                DATA.mkdir(parents=True, exist_ok=True)
+                with open(DATA / "sessions.jsonl", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(row) + "\n")
+        except Exception:
+            log.warning("stream stats persistence failed")
+        try:
+            post(chat.session_summary(row))
+        except Exception:
+            log.warning("stream stats notification failed")
+
+    def on_session(row: dict) -> None:
+        threading.Thread(target=save_session, args=(row,), daemon=True).start()
+
     while True:
         try:
-            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r))
+            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r), on_session=on_session)
         except asyncio.CancelledError:
             raise
         except Exception as e:
