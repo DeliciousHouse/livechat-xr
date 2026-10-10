@@ -104,7 +104,8 @@ class Server(unittest.TestCase):
                      "https://discord.com/api/webhooks/123/abc", HOOK + "/../../x"):
             self.assertEqual(self.post("/register", platform="tiktok", channel="me", webhook=hook)[0], 400, hook)
         self.assertEqual(self.post("/register", platform="tiktok", channel="<script>", webhook=HOOK)[0], 400)
-        self.assertEqual(self.post("/register", platform="youtube", channel="me", webhook=HOOK)[0], 400)
+        self.assertEqual(self.post("/register", platform="kick", channel="me", webhook=HOOK)[0], 400)
+        self.assertEqual(self.post("/register", name="A", email="a@b.co", youtube="me", webhook=HOOK)[0], 400)  # 3+ chars
         self.assertEqual(self.post("/register", name="", email="x@y.co", platform="tiktok", channel="me", webhook=HOOK)[0], 400)
         self.assertEqual(self.post("/register", name="A", email="nope", platform="tiktok", channel="me", webhook=HOOK)[0], 400)
         self.assertEqual(server.regs, {})
@@ -156,10 +157,18 @@ class Server(unittest.TestCase):
         self.assertEqual(server.regs, {})
         self.assertEqual(self.post(f"/m/{token}/test")[0], 404)
 
+    def test_youtube_registration_from_live_url(self):
+        code, headers, _ = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK,
+                                     youtube="https://www.youtube.com/@Some_One/live")
+        self.assertEqual(code, 303)
+        token = headers["Location"].split("?")[0].rsplit("/", 1)[1]
+        self.assertEqual(server.regs[token]["channels"], {"youtube": "@Some_One"})
+        self.check_channel.assert_any_call("youtube", "@Some_One")
+
     def test_both_platforms_in_one_registration(self):
         code, _, body = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK)
         self.assertEqual((code, server.regs), (400, {}))
-        self.assertIn("TikTok handle, your Twitch channel, or both", body)
+        self.assertIn("TikTok handle, your Twitch channel, your YouTube handle, or any mix", body)
         code, headers, _ = self.post("/register", name="Ann", email="ann@example.com", webhook=HOOK,
                                      tiktok="https://www.tiktok.com/@Ann.1", twitch=" @SomeOne ")
         self.assertEqual(code, 303)

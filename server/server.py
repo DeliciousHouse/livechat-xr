@@ -24,6 +24,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -48,8 +49,9 @@ GA_ID = os.environ.get("GA_ID", "")  # Google Analytics 4 measurement ID (G-...)
 GOOGLE_ID = os.environ.get("GOOGLE_CLIENT_ID", "")  # optional "Continue with Google" fills in a verified name + email
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
-CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$")}
-LABEL = {"tiktok": "TikTok", "twitch": "Twitch"}
+CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$"),
+           "youtube": re.compile(r"^@?[A-Za-z0-9_.-]{3,30}$")}
+LABEL = {"tiktok": "TikTok", "twitch": "Twitch", "youtube": "YouTube"}
 log = logging.getLogger("relay")
 
 regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created,
@@ -157,10 +159,11 @@ def normalise_channel(platform: str, channel: str) -> str:
         except ValueError:
             return channel  # malformed URLs fail the existing channel syntax check
         hosts = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
-                 "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv")}
+                 "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv"),
+                 "youtube": ("youtube.com", "www.youtube.com", "m.youtube.com")}
         if url.hostname in hosts.get(platform, ()):
-            channel = url.path.strip("/").split("/")[0]
-    if platform == "tiktok":
+            channel = url.path.strip("/").split("/")[0]  # also drops a trailing /live
+    if platform in ("tiktok", "youtube"):
         return "@" + channel.lstrip("@")
     return channel.lstrip("@#").lower()
 
@@ -170,7 +173,15 @@ def check_channel(platform: str, channel: str) -> bool | None:
 
     Use the profile, not TikTokLive's LIVE API: UserNotFoundError there can also mean never streamed.
     Twitch's authenticated Helix API has no cheap anonymous equivalent; IRC remains unchanged.
+    YouTube: the channel page answers 404 for an unknown handle.
     """
+    if platform == "youtube":
+        req = urllib.request.Request(f"https://www.youtube.com/{channel}", headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status == 200
+        except urllib.error.HTTPError as e:
+            return False if e.code == 404 else None
     if platform != "tiktok":
         return True
     req = urllib.request.Request(f"https://www.tiktok.com/{channel}", headers={"User-Agent": "Mozilla/5.0"})
@@ -321,7 +332,7 @@ DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" ari
 # The Quest shows a stock Meta notification from the Discord app (no custom styling); the body is one chat.batch().
 HOME = """<div class="hero">
 <h1 data-pretext>Stream chat on your Quest, <em>through Discord.</em></h1>
-<p class="sub" data-pretext>TikTok LIVE, Twitch or both. No PC, nothing to install on the headset.</p>
+<p class="sub" data-pretext>TikTok LIVE, Twitch, YouTube or any mix. No PC, nothing to install on the headset.</p>
 <figure style="margin:0"><div class="qn" role="img" aria-label="Example Quest notification from Discord in #stream-chat: Sam sent Rose x10, BigFan: nice shot!, Mike: GG, plus 2 more">
 <div class="ic" aria-hidden="true">{icon}</div><div aria-hidden="true"><div class="hd"><b>Discord</b><span>now</span></div>
 <div class="ti">#stream-chat · LiveChat XR</div><div class="bd">🎁 Sam sent Rose x10
@@ -337,7 +348,9 @@ Mike: GG
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="twitch">Twitch channel</label><input type="text" id="twitch" name="twitch" value="{twitch}" placeholder="yourchannel or twitch.tv URL"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-<div class="hint">Fill in one or both: chat from both lands in the same Discord channel.</div>
+<label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle or youtube.com URL"
+maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
+<div class="hint">Fill in any of them: chat from all of them lands in the same Discord channel.</div>
 {google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
 <div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
 </div></section>
@@ -379,11 +392,11 @@ except OSError:
     PRETEXT = b""
 
 PRIVACY = """<h1>Privacy</h1>
-<p>LiveChat XR for Discord posts your TikTok LIVE or Twitch chat into a Discord channel you choose. This is everything it keeps.</p>
+<p>LiveChat XR for Discord posts your TikTok LIVE, Twitch or YouTube chat into a Discord channel you choose. This is everything it keeps.</p>
 <div class="box"><b>What we store</b><ul>
 <li>Your name and email: typed in, or taken from your Google account if you use Continue with Google
 (only your name and email address; nothing else from Google).</li>
-<li>Your TikTok or Twitch channel name and the Discord webhook for your channel.</li>
+<li>Your TikTok, Twitch or YouTube channel name and the Discord webhook for your channel.</li>
 <li>Counts of messages posted and failed, for troubleshooting. Chat messages are passed straight to Discord, not stored.</li>
 <li>If you pay, Stripe handles the payment; we only keep the subscription ID.</li></ul></div>
 <div class="box"><b>What we don't do</b><ul><li>We don't sell or share your details. They are only used to run the relay and to
@@ -679,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
         elif not name or not EMAIL.match(email):
             err = "Please enter your name and a valid email."
         elif not wanted:
-            err = "Enter your TikTok handle, your Twitch channel, or both."
+            err = "Enter your TikTok handle, your Twitch channel, your YouTube handle, or any mix."
         elif any(not CHANNEL[p].match(c) for p, c in wanted.items()):
             err = "That channel name doesn't look right."
         if err:

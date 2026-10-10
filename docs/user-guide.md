@@ -9,7 +9,7 @@ Choose a path, connect your stream, then send a test before going live.
 | PCVR, with the game running on a Windows PC | [PC overlay](#pc-first-run) | Windows 10/11 x64, an OpenXR game using Direct3D 11, administrator rights to install |
 | Quest standalone, with the game running on the headset | [Hosted Discord relay](#quest-first-run) | Quest 2, Quest Pro or Quest 3 series, Discord, a server/channel you control, browser access. No LiveChat XR PC app |
 
-Both accept TikTok LIVE or Twitch. A Quest connected to a PC by Link/Air Link or Virtual Desktop is PCVR, not standalone. OpenXR is the interface the PC game uses to talk to your headset; this overlay cannot draw in a game using a different interface or D3D12/Vulkan.
+Both accept TikTok LIVE, Twitch and YouTube, in any mix. A Quest connected to a PC by Link/Air Link or Virtual Desktop is PCVR, not standalone. OpenXR is the interface the PC game uses to talk to your headset; this overlay cannot draw in a game using a different interface or D3D12/Vulkan.
 
 **Compatibility checkpoint:** the repo previously recorded the Meta PC version of Population: ONE on Quest 3 via Virtual Desktop as tested. Current docs do not re-certify that setup. The hosted relay posts to Discord; actual notifications over a standalone game and a five-minute setup are not yet verified by newcomer QA. Test on your own headset before relying on it during a stream.
 
@@ -27,7 +27,7 @@ On a fresh setup, Settings opens automatically. If it does not, look for the pur
 
 ![Actual PC Settings window with default values and empty private fields](images/pc-settings.png)
 
-Enter your **TikTok handle**, your **Twitch channel**, or both; chat from both shows in the same banner. Use your actual account handle, not your display name. In the PC app use the bare handle (TikTok also accepts leading `@`; Twitch accepts leading `#`), not a profile URL.
+Enter your **TikTok handle**, your **Twitch channel**, your **YouTube handle**, or any mix; chat from all of them shows in the same banner. Use your actual account handle, not your display name. In the PC app use the bare handle (TikTok and YouTube also accept a leading `@`; Twitch accepts leading `#`), not a profile URL. YouTube chat comes from your channel's public live page, so it needs no API key or login; Super Chats, stickers and memberships show in gold.
 
 For Population: ONE, leave **Games** as `PopulationONE.exe` if that matches your installed game's process. For another game, open Windows Task Manager while it runs, choose **Details**, and copy the executable name including `.exe`. Separate multiple games with commas. Leave placement and timing at their defaults for your first test. Leave both optional private fields empty for overlay-only use. Select **Start with Windows** if desired, then **Save**.
 
@@ -51,7 +51,7 @@ Use a private Discord server and a text channel such as `stream-chat`. If you ar
 
 ### Step 2: Connect your channel
 
-Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Enter your TikTok handle, your Twitch channel, or both: chat from both lands in the same Discord channel. Here, unlike the PC app, a full TikTok/Twitch profile URL is also accepted; leading `@` is optional.
+Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Enter your TikTok handle, your Twitch channel, your YouTube handle, or any mix: chat from all of them lands in the same Discord channel. Here, unlike the PC app, a full TikTok/Twitch/YouTube profile URL is also accepted (a `/live` URL works too); leading `@` is optional.
 
 ![Public relay signup page, empty fields](images/relay-signup.png)
 
@@ -124,7 +124,7 @@ PC logs: tray **Open data folder**, then `app.log` and `overlay.log`. For suppor
 
 **Do I need a PC for Quest standalone?** No LiveChat XR PC app is needed. The hosted relay reads chat; install Discord from Meta Horizon Store and verify notifications on your headset.
 
-**Can I use Twitch instead of TikTok?** Yes. Choose Twitch on signup or PC Settings. Twitch signup checks the name's format, not whether the account exists.
+**Can I use Twitch or YouTube instead of TikTok?** Yes. Enter the Twitch channel or YouTube handle on signup or in PC Settings. Twitch signup checks the name's format, not whether the account exists; YouTube signup checks that the channel page exists. YouTube chat is read only while your channel is live and starts from the moment you connect (old messages are not replayed).
 
 **What does Connect Discord authorize?** It creates a webhook in the server/channel you pick so the relay can post there. Use a private channel you control. It does not need your Discord password in the LiveChat XR form.
 

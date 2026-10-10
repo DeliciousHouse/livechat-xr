@@ -202,6 +202,106 @@ class Relay(unittest.TestCase):
             self.assertEqual(chat.load_config()["chat"]["channel"], "")  # the migrated value does not come back
 
 
+def _yt(kind, name, msg=None, **extra):
+    """A get_live_chat chat item the way YouTube sends it: renderer name -> fields with runs/simpleText."""
+    r = {"id": extra.pop("id", f"{kind}-{name}"), "authorName": {"simpleText": name}, **extra}
+    if msg is not None:
+        r["message"] = {"runs": [{"text": msg}]}
+    return {kind: r}
+
+
+class YouTube(unittest.TestCase):
+    def test_lines(self):
+        self.assertEqual(chat.youtube_line(_yt("liveChatTextMessageRenderer", "Fan", "gg")), "Fan: gg")
+        own = _yt("liveChatTextMessageRenderer", "Me", "mine", authorExternalChannelId="UCowner")
+        self.assertIsNone(chat.youtube_line(own, "UCowner"))
+        self.assertEqual(chat.youtube_line(own, ""), "Me: mine")  # unknown owner: nothing is skipped
+        paid = _yt("liveChatPaidMessageRenderer", "Big", "love it", purchaseAmountText={"simpleText": "$5.00"})
+        self.assertEqual(chat.youtube_line(paid), "🎁 Big sent $5.00: love it")
+        sticker = _yt("liveChatPaidStickerRenderer", "Sti", purchaseAmountText={"simpleText": "€2.00"})
+        self.assertEqual(chat.youtube_line(sticker), "🎁 Sti sent €2.00")
+        member = _yt("liveChatMembershipItemRenderer", "New", headerSubtext={"simpleText": "Welcome to the club!"})
+        self.assertEqual(chat.youtube_line(member), "🎁 New: Welcome to the club!")
+        gifted = {"liveChatSponsorshipsGiftPurchaseAnnouncementRenderer": {"id": "g", "header": {"liveChatSponsorshipsHeaderRenderer": {
+            "authorName": {"simpleText": "Gen"}, "primaryText": {"runs": [{"text": "Gen gifted 5 memberships"}]}}}}}
+        self.assertEqual(chat.youtube_line(gifted), "🎁 Gen gifted 5 memberships")
+        self.assertIsNone(chat.youtube_line({"liveChatViewerEngagementMessageRenderer": {"id": "e"}}))
+
+    def test_emoji_runs(self):
+        item = {"liveChatTextMessageRenderer": {"id": "1", "authorName": {"simpleText": "A"}, "message": {"runs": [
+            {"text": "hi "}, {"emoji": {"emojiId": "😂", "shortcuts": [":joy:"]}}, {"text": " "},
+            {"emoji": {"emojiId": "UCx/abc", "isCustomEmoji": True, "shortcuts": [":_hype:"]}}]}}}
+        self.assertEqual(chat.youtube_line(item), "A: hi 😂 :_hype:")
+
+    def test_page_live_and_offline(self):
+        live = ('x "INNERTUBE_API_KEY":"KEY1" y "INNERTUBE_CLIENT_VERSION":"2.1" "channelId":"UC' + "a" * 22 + '"'
+                ' "isLive":true "liveChatRenderer":{"continuations":[{"reloadContinuationData":{"continuation":"CONT1"}}]}')
+        self.assertEqual(chat.yt_page(live), {"key": "KEY1", "version": "2.1", "continuation": "CONT1", "owner": "UC" + "a" * 22})
+        self.assertIsNone(chat.yt_page('"INNERTUBE_API_KEY":"K" "continuation":"other page"'))  # channel page, not live
+
+    def test_next_and_view_switch(self):
+        self.assertEqual(chat.yt_next({"continuations": [{"invalidationContinuationData": {"continuation": "C2", "timeoutMs": 10000}}]}), ("C2", 10))
+        self.assertEqual(chat.yt_next({"continuations": [{"timedContinuationData": {"continuation": "C3", "timeoutMs": 100}}]}), ("C3", 1))
+        self.assertIsNone(chat.yt_next({"continuations": [{"liveChatReplayContinuationData": {"continuation": "R"}}]}))
+        header = {"liveChatHeaderRenderer": {"viewSelector": {"sortFilterSubMenuRenderer": {"subMenuItems": [
+            {"title": "Top chat", "selected": True, "continuation": {"reloadContinuationData": {"continuation": "TOP"}}},
+            {"title": "Live chat", "selected": False, "continuation": {"reloadContinuationData": {"continuation": "ALL"}}}]}}}}
+        self.assertEqual(chat.yt_all_chat({"header": header}), "ALL")
+        header["liveChatHeaderRenderer"]["viewSelector"]["sortFilterSubMenuRenderer"]["subMenuItems"][1]["selected"] = True
+        self.assertIsNone(chat.yt_all_chat({"header": header}))
+
+    def test_backlog_skipped_then_live_emitted(self):
+        """Offline -> live: the first responses (Top chat, then the all-chat switch) are history and never shown;
+        later responses emit only unseen ids; the replay continuation means the stream ended."""
+        nxt = lambda c: {"continuations": [{"invalidationContinuationData": {"continuation": c, "timeoutMs": 1000}}]}
+        act = lambda *items: {"actions": [{"addChatItemAction": {"item": i}} for i in items]}
+        top_header = {"liveChatHeaderRenderer": {"viewSelector": {"sortFilterSubMenuRenderer": {"subMenuItems": [
+            {"title": "Live chat", "selected": False, "continuation": {"reloadContinuationData": {"continuation": "ALL"}}}]}}}}
+        old, new1, new2 = (_yt("liveChatTextMessageRenderer", n, n, id=n) for n in ("old", "new1", "new2"))
+        responses = {"CONT1": {**act(old), **nxt("X"), "header": top_header},
+                     "ALL": {**act(old, _yt("liveChatTextMessageRenderer", "old2", "old2", id="old2")), **nxt("C2")},
+                     "C2": {**act(old, new1), **nxt("C3")},
+                     "C3": {**act(new1, new2), "continuations": [{"liveChatReplayContinuationData": {"continuation": "R"}}]}}
+        pages = iter(['"nothing live here"', 'x "INNERTUBE_API_KEY":"K" "isLive":true "liveChatRenderer":{"continuations":'
+                      '[{"reloadContinuationData":{"continuation":"CONT1"}}]}'])
+        out, statuses, sleeps = [], [], []
+
+        async def sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 4:  # offline wait, two chat waits, then the ended wait
+                raise asyncio.CancelledError
+
+        with mock.patch.object(chat, "_yt_get", lambda url: next(pages)), \
+                mock.patch.object(chat, "_yt_chat", lambda info, c: responses[c]), mock.patch("asyncio.sleep", sleep):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(chat.youtube("@Me", out.append, statuses.append))
+        self.assertEqual(out, ["new1: new1", "new2: new2"])
+        self.assertEqual(sleeps, [60, 1, 1, 60])
+        self.assertEqual(statuses, ["YouTube: waiting for @Me to go live", "YouTube: connected to @Me", "YouTube: @Me went offline, waiting"])
+
+    def test_relay_with_three_platforms_and_config(self):
+        async def fake(channel, emit, status):
+            status(f"YouTube: connected to @{channel}")
+            emit("Yt: hello")
+            await asyncio.sleep(3600)
+
+        batches, statuses = [], []
+
+        async def go():
+            task = asyncio.ensure_future(chat.relay("", "", batches.append, statuses.append, seconds=0.05, channels={"youtube": "me"}))
+            await asyncio.sleep(0.2)
+            task.cancel()
+            await task
+
+        with mock.patch.object(chat, "youtube", fake):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(go())
+        self.assertEqual((batches, statuses), (["Yt: hello"], ["YouTube: connected to @me"]))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
+            (Path(d) / "config.ini").write_text("[chat]\ntiktok = a\ntwitch = b\nyoutube = @c\n", encoding="utf-8")
+            self.assertEqual(chat.channels(chat.load_config()), {"tiktok": "a", "twitch": "b", "youtube": "@c"})
+
+
 class FollowAsk(unittest.TestCase):
     ASK = "follow for the next sword-only run"
 
