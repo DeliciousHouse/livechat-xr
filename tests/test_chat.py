@@ -280,23 +280,56 @@ class YouTube(unittest.TestCase):
         self.assertEqual(statuses, ["YouTube: waiting for @Me to go live", "YouTube: connected to @Me", "YouTube: @Me went offline, waiting"])
 
     def test_relay_with_three_platforms_and_config(self):
-        async def fake(channel, emit, status):
+        active, seen = set(), {}
+
+        async def fake_tiktok(channel, emit, status, key="", ask=None):
+            seen["tiktok"] = channel
+            active.add("tiktok")
+            status(f"TikTok: connected to @{channel}")
+            emit("Tk: hello")
+            await asyncio.Event().wait()
+
+        async def fake_twitch(channel, emit, status):
+            seen["twitch"] = channel
+            active.add("twitch")
+            status(f"Twitch: connected to #{channel}")
+            emit("🎁 Tw cheered 100 bits")
+            await asyncio.Event().wait()
+
+        async def fake_youtube(channel, emit, status):
+            seen["youtube"] = channel
+            active.add("youtube")
             status(f"YouTube: connected to @{channel}")
             emit("Yt: hello")
-            await asyncio.sleep(3600)
+            await asyncio.Event().wait()
 
         batches, statuses = [], []
 
         async def go():
-            task = asyncio.ensure_future(chat.relay("", "", batches.append, statuses.append, seconds=0.05, channels={"youtube": "me"}))
-            await asyncio.sleep(0.2)
-            task.cancel()
-            await task
+            received = asyncio.Event()
 
-        with mock.patch.object(chat, "youtube", fake):
-            with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(go())
-        self.assertEqual((batches, statuses), (["Yt: hello"], ["YouTube: connected to @me"]))
+            def on_batch(text):
+                self.assertEqual(active, {"tiktok", "twitch", "youtube"})
+                batches.append(text)
+                received.set()
+
+            task = asyncio.ensure_future(chat.relay("", "", on_batch, statuses.append, seconds=0.05,
+                                                    channels={"tiktok": "a", "twitch": "b", "youtube": "c"}))
+            try:
+                await asyncio.wait_for(received.wait(), 2)
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+
+        with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch), \
+                mock.patch.object(chat, "youtube", fake_youtube):
+            asyncio.run(go())
+        self.assertEqual(seen, {"tiktok": "a", "twitch": "b", "youtube": "c"})
+        self.assertEqual(batches, ["🎁 Tw cheered 100 bits\nTk: hello\nYt: hello"])
+        self.assertEqual(statuses, ["TikTok: connected to @a",
+                                    "TikTok: connected to @a · Twitch: connected to #b",
+                                    "TikTok: connected to @a · Twitch: connected to #b · YouTube: connected to @c"])
         with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
             (Path(d) / "config.ini").write_text("[chat]\ntiktok = a\ntwitch = b\nyoutube = @c\n", encoding="utf-8")
             self.assertEqual(chat.channels(chat.load_config()), {"tiktok": "a", "twitch": "b", "youtube": "@c"})
