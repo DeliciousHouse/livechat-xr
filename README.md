@@ -17,6 +17,25 @@ The PC banner batches comments (seven seconds and three selected lines by defaul
 - **Standalone:** install Discord from Meta Horizon Store, sign in, connect your channel at the hosted relay, then **Send test message** on your private manage page. Verify the actual Discord channel first, then notifications outside and inside the game. No unofficial APK is required.
 - **Hosted pricing:** first five available free registrations, then **$3/month** or **$25/year**. Your manage page confirms whether payment is needed. The PC app has no subscription gate. [Billing and cancellation](docs/user-guide.md#pricing-and-billing) · [Privacy](https://livechat.deliciouswines.org/privacy).
 
+## Turn TikTok LIVE viewers into followers (PC app)
+
+While you stream on TikTok, the PC app can put a short follow ask on your banner: when a viewer who doesn't follow
+you yet sends their **second** chat message, the next banner adds `» follow for the next sword-only run`. Each viewer
+gets it at most once per stream, and at most one ask shows every 90 seconds across all viewers (a viewer who was
+skipped by that limit gets it on their next message). Known followers are never asked; when TikTok doesn't say whether
+someone follows, they are asked. Change the text in **Settings → TikTok follow ask**, or clear it to turn asks off.
+Twitch chat never gets the ask (anonymous Twitch chat doesn't carry follow status), and the hosted relay never sends it.
+
+Each TikTok LIVE connection also appends one summary line to `sessions.jsonl` in the data folder (next to `app.log`):
+
+```json
+{"start": "2026-10-09T20:00:05+00:00", "end": "2026-10-09T21:12:40+00:00", "channel": "@you", "peak_viewers": 14, "new_follows": 3, "asks_shown": 5}
+```
+
+`new_follows` counts distinct viewers whose follow TikTok reported during that connection; `peak_viewers` is the highest
+live viewer count TikTok sent (`null` if none arrived). If the connection drops and reconnects mid-stream, that is a
+new line. This works even with the ask turned off. Details: [reference](docs/reference.md#pc-settings).
+
 ## Documentation
 
 | Document | Use it for |

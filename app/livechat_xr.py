@@ -30,6 +30,7 @@ FIELDS = [  # (section, key, label)
     ("banner", "up", "Height above eye line (m)"),
     ("banner", "distance", "Distance (m)"),
     ("banner", "width", "Width (m)"),
+    ("chat", "follow_ask", "TikTok follow ask (empty = off)"),
     ("chat", "tiktok_sign_api_key", "TikTok sign API key (optional)"),
     ("chat", "discord_webhook", "Discord webhook URL (optional)"),
 ]

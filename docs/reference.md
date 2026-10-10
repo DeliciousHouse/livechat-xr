@@ -13,6 +13,7 @@ Stored in `%LOCALAPPDATA%\LiveChatXR\config.ini`. The Python reader overlays sav
 | chat / platform, chat / channel | legacy | Pre-0.2 single-platform pair. On load the app moves a set `channel` into `tiktok` or `twitch` (by `platform`, case-insensitive) and blanks it |
 | chat / tiktok_sign_api_key | string, empty | Optional TikTokLive signing key; sets `SIGN_API_KEY` in the app process |
 | chat / discord_webhook | string, empty | Optional Discord destination in addition to the PC banner |
+| chat / follow_ask | string, `follow for the next sword-only run` | TikTok only. Banner line (prefixed `» `) shown once per viewer on their second message when TikTok does not report them as a follower (`follow_info.follow_status` 1 or 2); unknown status is asked. One ask per 90 seconds overall. Empty turns asks off; `sessions.jsonl` is still written |
 | games / exes | string, `PopulationONE.exe` | Exact executable basenames, case-insensitive. Commas separate entries; layer also accepts semicolons |
 | banner / seconds | float, `7` | Batch interval and display duration, seconds; Settings requires greater than zero |
 | banner / max_lines | integer, `3` | Lines selected per batch; Settings requires greater than zero |
@@ -24,7 +25,7 @@ Settings validation is not a general-purpose config-file schema: hand-edited val
 
 The tray offers **Settings…**, **Send test banner**, **Open data folder**, **Quit**. Settings offers **Save** and **Send test banner**. Test sends a local banner and, if configured, a Discord post without requiring a live stream. Unsaved Settings fields do not apply to that test.
 
-Files: `config.ini` (contains optional secrets), `banner.txt` (latest batch), `app.log` and `app.log.1` (rotating 1 MiB), `overlay.log` (layer log, cleared if over 1 MiB at a subsequent handshake). Atomic replacement prevents partial config/banner reads. Do not upload the data folder without checking it for secrets and chat text.
+Files: `config.ini` (contains optional secrets), `banner.txt` (latest batch), `app.log` and `app.log.1` (rotating 1 MiB), `sessions.jsonl` (one JSON line per TikTok LIVE connection: `start`, `end` (UTC ISO 8601), `channel`, `peak_viewers` (max `RoomUserSeqEvent.total`, or `null`), `new_follows` (distinct followers from `FollowEvent`), `asks_shown`; append-only, never rotated), `overlay.log` (layer log, cleared if over 1 MiB at a subsequent handshake). Atomic replacement prevents partial config/banner reads. Do not upload the data folder without checking it for secrets and chat text.
 
 The manifest names `XR_APILAYER_LIVECHATXR_banner`. Installer registers it under the 64-bit machine-wide implicit OpenXR layer key. `LIVECHATXR_DISABLE=1` disables it through the manifest; restart affected games after changing the environment. Only OpenXR / D3D11 sessions draw; failures disable drawing and pass frames through. Texture is 1024 × 320; long text can be clipped. This is not a chat-history viewer.
 
@@ -40,6 +41,7 @@ tiktok =
 twitch =
 tiktok_sign_api_key =
 discord_webhook =
+follow_ask = follow for the next sword-only run
 [games]
 exes = PopulationONE.exe
 [banner]
@@ -52,10 +54,11 @@ width = 0.62
 
 Set a real channel in Settings before connecting. This blank-channel example is safe to save but does not read a stream.
 
-`app/chat.py` supplies `relay(platform, channel, on_batch, status, seconds=7, max_lines=3, sign_api_key="", channels=None)`, an async coroutine used by both app and server. `channels={"tiktok": "@a", "twitch": "b"}` reads both platforms into the same windows; without it, `platform`/`channel` is a single source. `on_batch(text)` receives nonempty windows; `status(text)` receives connection changes, joined with ` · ` per platform when there are two.
+`app/chat.py` supplies `relay(platform, channel, on_batch, status, seconds=7, max_lines=3, sign_api_key="", channels=None, follow_ask=None)`, an async coroutine used by both app and server. `channels={"tiktok": "@a", "twitch": "b"}` reads both platforms into the same windows; without it, `platform`/`channel` is a single source. `on_batch(text)` receives nonempty windows; `status(text)` receives connection changes, joined with ` · ` per platform when there are two.
 
 - Normal streamer comments are skipped. TikTok gift combos emit their final count. Twitch Bits and selected sub/resub/gift notices are supported; mass gifts suppress their individual notices.
-- Gift lines sort before normal comments, stably within each group. At most `max_lines` lines are selected, followed by `+N more` when needed. Even gifts can exceed that limit; not every gift is guaranteed visible.
+- `follow_ask=None` (the hosted relay) disables the follow ask and `sessions.jsonl`; the PC app passes `chat / follow_ask`.
+- Gift and follow-ask lines sort before normal comments, stably within each group. At most `max_lines` lines are selected, followed by `+N more` when needed. Even gifts can exceed that limit; not every gift is guaranteed visible.
 - Twitch uses anonymous TLS IRC, reconnecting after errors in 10 seconds. No Twitch password or key is requested.
 - TikTok uses unofficial TikTokLive 7.0.1 and its signing service. Normal retries are 60 seconds; five consecutive account-not-found failures raise that to 1800 seconds. Connection, an offline result or a different error resets the count. Account-not-found can also mean no LIVE permission.
 - `post_discord(webhook, text)` returns a bool, truncates content to 2000 characters, sets `allowed_mentions.parse` to an empty list, and times out after 10 seconds. Failed/rate-limited posts are dropped, not queued for replay.

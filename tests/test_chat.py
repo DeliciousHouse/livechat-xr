@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import tempfile
 import unittest
@@ -154,7 +155,7 @@ class Relay(unittest.TestCase):
         return batches, statuses
 
     def test_both_platforms_share_batches_and_status(self):
-        async def fake_tiktok(user, emit, status, key=""):
+        async def fake_tiktok(user, emit, status, key="", ask=None):
             status(f"TikTok: connected to @{user}")
             emit("Fan: hi from tiktok")
             await asyncio.sleep(3600)
@@ -179,7 +180,7 @@ class Relay(unittest.TestCase):
         self.assertEqual((batches, statuses), (["a: 1"], ["Twitch: connected to #c"]))
 
     def test_one_source_failing_fails_the_relay(self):
-        async def fake_tiktok(user, emit, status, key=""):
+        async def fake_tiktok(user, emit, status, key="", ask=None):
             await asyncio.sleep(3600)
 
         async def fake_twitch(channel, emit, status):
@@ -199,6 +200,123 @@ class Relay(unittest.TestCase):
             chat.save_config(cp)
             self.assertEqual(chat.channels(chat.load_config()), {"tiktok": "@old", "twitch": "second"})
             self.assertEqual(chat.load_config()["chat"]["channel"], "")  # the migrated value does not come back
+
+
+class FollowAsk(unittest.TestCase):
+    ASK = "follow for the next sword-only run"
+
+    def test_second_message_once_per_viewer_and_90s_global_cooldown(self):
+        s = chat.Session(self.ASK)
+        self.assertIsNone(s.comment("a", False, 0))  # first message: no ask
+        self.assertEqual(s.comment("a", False, 1), "» " + self.ASK)  # second: ask
+        self.assertIsNone(s.comment("a", False, 200))  # once per viewer
+        self.assertIsNone(s.comment("b", None, 10))
+        self.assertIsNone(s.comment("b", None, 60))  # unknown status is eligible, but 59 s since the last ask
+        self.assertEqual(s.comment("b", None, 91), "» " + self.ASK)  # next message after the cooldown
+        self.assertEqual(s.asks, 2)
+
+    def test_followers_are_never_asked(self):
+        s = chat.Session(self.ASK)
+        for t in (0, 100, 200):
+            self.assertIsNone(s.comment("fan", True, t))  # known follower
+        s.comment("c", False, 0)
+        s.follow("c")  # followed during the stream before their second message
+        self.assertIsNone(s.comment("c", False, 300))
+        s.follow("c")  # re-follow in the same stream counts once
+        s.follow("d")
+        self.assertEqual((len(s.followers), s.asks), (2, 0))
+
+    def test_empty_text_turns_the_ask_off(self):
+        s = chat.Session("  ")
+        s.comment("a", False, 0)
+        self.assertIsNone(s.comment("a", False, 1))
+
+    def test_following_reads_follow_status_or_unknown(self):
+        u = lambda info: mock.Mock(follow_info=info)
+        self.assertIs(chat._following(u(None)), None)
+        self.assertIs(chat._following(u(mock.Mock(follow_status=0))), False)
+        self.assertIs(chat._following(u(mock.Mock(follow_status=1))), True)
+        self.assertIs(chat._following(u(mock.Mock(follow_status=2))), True)  # friends
+        self.assertIs(chat._following(mock.Mock()), None)  # attribute present but not an int
+        self.assertIs(chat._following(None), None)
+
+    def test_ask_line_survives_overflow(self):
+        lines = ["a: 1", "b: 2", "c: 3", "d: 4", "» " + self.ASK]
+        self.assertEqual(chat.batch(lines), "» " + self.ASK + "\na: 1\nb: 2\n+2 more")
+
+    def replay(self, follow_ask):
+        """Fake TikTokLiveClient replays a stream through chat.tiktok's handlers, then the stream is cancelled."""
+        from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, RoomUserSeqEvent
+
+        def ev(cls, **kw):
+            e = mock.Mock(spec=cls, **kw)
+            e.__class__ = cls
+            return e
+
+        user = lambda h, status=0: mock.Mock(unique_id=h, nickname=h.title(), follow_info=mock.Mock(follow_status=status))
+        events = [
+            (ConnectEvent, ev(ConnectEvent)),
+            (RoomUserSeqEvent, ev(RoomUserSeqEvent, total=4)),
+            (CommentEvent, ev(CommentEvent, user=user("new"), comment="hi")),
+            (CommentEvent, ev(CommentEvent, user=user("fan", 1), comment="gg")),
+            (RoomUserSeqEvent, ev(RoomUserSeqEvent, total=9)),
+            (CommentEvent, ev(CommentEvent, user=user("fan", 1), comment="nice")),
+            (CommentEvent, ev(CommentEvent, user=user("new"), comment="sword only?")),
+            (CommentEvent, ev(CommentEvent, user=user("me"), comment="own message")),
+            (CommentEvent, ev(CommentEvent, user=user("new"), comment="again")),
+            (FollowEvent, ev(FollowEvent, user=user("new"))),
+            (RoomUserSeqEvent, ev(RoomUserSeqEvent, total=6)),
+        ]
+
+        class FakeClient:
+            def __init__(self, unique_id):
+                self.handlers, self.connected = {}, False
+
+            def on(self, cls):
+                return lambda fn: self.handlers.setdefault(cls, fn)
+
+            async def connect(self, **_):
+                for cls, e in events:
+                    if cls in self.handlers:
+                        await self.handlers[cls](e)
+                raise asyncio.CancelledError  # app stopped mid-stream: the summary must still be written
+
+        out = []
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)), \
+                mock.patch("TikTokLive.TikTokLiveClient", FakeClient):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(chat.tiktok("@me", out.append, lambda s: None, "", follow_ask))
+            f = Path(d) / "sessions.jsonl"
+            rows = [json.loads(line) for line in f.read_text(encoding="utf-8").splitlines()] if f.exists() else None
+        return out, rows
+
+    def test_stream_replay_asks_and_writes_session_summary(self):
+        out, rows = self.replay(self.ASK)
+        self.assertEqual(out, ["New: hi", "Fan: gg", "Fan: nice", "New: sword only?", "» " + self.ASK, "New: again"])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual({k: row[k] for k in ("channel", "peak_viewers", "new_follows", "asks_shown")},
+                         {"channel": "@me", "peak_viewers": 9, "new_follows": 1, "asks_shown": 1})
+        self.assertLessEqual(row["start"], row["end"])
+
+    def test_hosted_relay_path_is_unchanged(self):
+        out, rows = self.replay(None)  # server.py never passes follow_ask
+        self.assertEqual(out, ["New: hi", "Fan: gg", "Fan: nice", "New: sword only?", "New: again"])
+        self.assertIsNone(rows)
+
+    def test_relay_and_runner_pass_follow_ask_to_tiktok(self):
+        seen = []
+
+        async def fake_tiktok(user, emit, status, key="", ask=None):
+            seen.append(ask)
+            raise RuntimeError("stop")
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
+            cfg = chat.load_config()  # no config.ini: defaults only
+        cfg["chat"]["tiktok"], cfg["banner"]["seconds"] = "me", "0.01"
+        with mock.patch.object(chat, "tiktok", fake_tiktok), self.assertRaises(RuntimeError):
+            asyncio.run(chat.Runner()._main(cfg))
+        self.assertEqual(seen, [self.ASK])  # default from DEFAULTS
 
 
 class Discord(unittest.TestCase):
