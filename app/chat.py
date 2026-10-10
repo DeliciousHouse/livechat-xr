@@ -17,7 +17,7 @@ from pathlib import Path
 
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
-    "chat": {"platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": ""},
+    "chat": {"tiktok": "", "twitch": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "", "discord_webhook": ""},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -30,7 +30,16 @@ def load_config(portable: bool = False) -> configparser.ConfigParser:
     if portable:
         cp["games"]["exes"] = "LiveChatXR-QA-NotAGame.exe"
     cp.read(DIR / "config.ini", encoding="utf-8")
+    c = cp["chat"]
+    if c["channel"].strip() and not channels(cp):  # pre-0.2 config: one platform + channel -> per-platform keys
+        c["tiktok" if c["platform"].lower() == "tiktok" else "twitch"] = c["channel"].strip()
+        c["channel"] = ""
     return cp
+
+
+def channels(cp: configparser.ConfigParser) -> dict[str, str]:
+    """{platform: channel} for each platform set in [chat]; both chats share one banner / Discord channel."""
+    return {p: cp["chat"][p].strip() for p in ("tiktok", "twitch") if cp["chat"].get(p, "").strip()}
 
 
 def save_config(cp: configparser.ConfigParser) -> None:
@@ -196,26 +205,36 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "") -> None:
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
-                sign_api_key: str = "") -> None:
-    """Run the chat source and call on_batch(text) once per window that had comments. Used by the PC app
-    (banner + optional Discord) and by the hosted server (Discord only)."""
+                sign_api_key: str = "", channels: dict[str, str] | None = None) -> None:
+    """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
+    (banner + optional Discord) and by the hosted server (Discord only).
+
+    channels={"tiktok": "@a", "twitch": "b"} reads both into the same batches (gifts from either still sort
+    first); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source."""
     queue: list[str] = []
-    channel = channel.strip()
-    if platform.lower() == "tiktok":
-        source = tiktok(channel, queue.append, status, sign_api_key)
-    else:
-        source = twitch(channel, queue.append, status)
-    src = asyncio.ensure_future(source)
+    channels = channels or {platform: channel}
+    statuses: dict[str, str] = {}
+
+    def source(p: str, c: str):
+        def st(s: str) -> None:
+            statuses[p] = s
+            status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: …"
+        return tiktok(c.strip(), queue.append, st, sign_api_key) if p.lower() == "tiktok" else twitch(c.strip(), queue.append, st)
+
+    srcs = [asyncio.ensure_future(source(p, c)) for p, c in channels.items()]
     try:
-        while not src.done():
+        while not any(s.done() for s in srcs):  # sources only finish on error or cancel; one failing restarts all
             await asyncio.sleep(seconds)
             if queue:
                 lines = queue[:]
                 queue.clear()
                 on_batch(batch(lines, max_lines))
-        src.result()
+        for s in srcs:
+            if s.done():
+                s.result()
     finally:
-        src.cancel()
+        for s in srcs:
+            s.cancel()
 
 
 # ---------------------------------------------------------------- runner (background thread + event loop)
@@ -239,14 +258,14 @@ class Runner:
             if webhook:
                 threading.Thread(target=post_discord, args=(webhook, text), daemon=True).start()
 
-        await relay(cfg["chat"]["platform"], cfg["chat"]["channel"], on_batch, self._set_status,
+        await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
-                    cfg["chat"].get("tiktok_sign_api_key", ""))
+                    cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg))
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
-        if not cfg["chat"]["channel"].strip():
-            self._set_status("Not set up: open Settings and enter your channel")
+        if not channels(cfg):
+            self._set_status("Not set up: open Settings and enter your TikTok handle or Twitch channel")
             return
         self._set_status("Connecting…")
         ready = threading.Event()
@@ -286,12 +305,13 @@ if __name__ == "__main__":
     import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     cfg = load_config()
-    if len(sys.argv) == 4:
-        cfg["chat"]["platform"], cfg["chat"]["channel"], cfg["chat"]["discord_webhook"] = sys.argv[1:]
+    if len(sys.argv) == 4 and sys.argv[1] in ("tiktok", "twitch"):
+        cfg["chat"]["tiktok"] = cfg["chat"]["twitch"] = ""
+        cfg["chat"][sys.argv[1]], cfg["chat"]["discord_webhook"] = sys.argv[2:]
     elif len(sys.argv) != 1:
         sys.exit("usage: python chat.py [tiktok|twitch <channel> <discord webhook URL>]")
-    if not cfg["chat"]["channel"].strip():
-        sys.exit("no channel set: pass  tiktok|twitch <channel> <webhook>")
+    if not channels(cfg):
+        sys.exit("no channel set: pass  tiktok|twitch <channel> <webhook>  (or set [chat] tiktok / twitch in config.ini)")
     try:
         asyncio.run(Runner()._main(cfg))
     except KeyboardInterrupt:
