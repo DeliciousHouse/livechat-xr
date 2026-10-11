@@ -75,8 +75,8 @@ Environment is read at import/startup. Restart after configuration changes. No s
 |---|---|---|
 | DATA_DIR | `data` (`/data` in Docker) | Persistent files |
 | PORT | `13300` | HTTP port; server binds all interfaces |
-| MAX_REGS | `50` | Hard ceiling including pending registrations |
-| FREE_SLOTS | `5` | Current free-registration capacity |
+| MAX_REGS | `50` | Hard ceiling including founder, free and paid registrations |
+| FREE_SLOTS | `5` | Lifetime founder slots; later users get one channel free |
 | PUBLIC_URL | empty | Public origin for manage links and Discord callback; trailing slash stripped |
 | PAY_MONTHLY | empty | Monthly Stripe Payment Link |
 | PAY_YEARLY | empty | Yearly Stripe Payment Link |
@@ -87,7 +87,7 @@ Environment is read at import/startup. Restart after configuration changes. No s
 | GOOGLE_CLIENT_ID | empty | Enables Google identity prefill/verification |
 | GA_ID | empty | Enables GA4 on public home/privacy/manage pages |
 
-Empty payment links do not create a free fallback: a full free pool still yields pending registrations. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
+First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
 
 ## Relay HTTP interface
 
@@ -99,7 +99,7 @@ Responses are HTML except simple health/Stripe text responses; there is no gener
 | POST `/register` | URL-encoded name, email, webhook, and `tiktok` and/or `twitch` (the older `platform` + `channel` pair is still accepted); optional `google` credential and `via=discord` or `via=webhook`. 303 to manage on success; 400 validation error; 503 new-registration capacity reached |
 | GET `/discord/callback` | One-use state and code, valid for 900 seconds; exchanges Discord authorization for the selected channel's webhook; 400 on failure |
 | GET `/m/{token}` | Private manage page; 404 absent/deleted registration |
-| POST `/m/{token}/test` | Posts a test even for a pending registration; 404 inactive link. “Test sent” is not a delivery receipt |
+| POST `/m/{token}/test` | Posts a test for any plan; 404 inactive link. “Test sent” is not a delivery receipt |
 | POST `/m/{token}/delete` | Deletes registration and in-memory stats, stops runner. Does not cancel Stripe billing |
 | GET `/privacy` | Stored data, analytics and deletion policy |
 | GET `/health` | 200, `ok` plus registration count; liveness only, not end-to-end delivery |
@@ -110,7 +110,9 @@ Responses are HTML except simple health/Stripe text responses; there is no gener
 
 Registration constraints: name truncated to 60 characters, email lowercased and syntax-checked (local part 1–64, domain part 1–190, final suffix at least two letters), TikTok handle 2–24 letters/digits/underscore/dot, Twitch 3–25 letters/digits/underscore. Leading `@` and supported TikTok/Twitch profile URLs normalize on the **server only**. Discord webhook must be HTTPS on discord.com or discordapp.com (including ptb/canary), numeric ID 15–22 digits and token 40–100 word/hyphen characters, then pass a Discord lookup. Ordinary POST bodies over 8192 bytes return 413. Manage-path tokens must be 20–64 word/hyphen characters.
 
-TikTok signup checks profile hydration even when offline. A missing/unavailable account is rejected; network failures or inconclusive profile responses allow signup with a warning. Twitch signup checks syntax only. Reusing exactly the same webhook preserves token, plan, subscription and creation time, updating identity/channel fields. Free slots are counted from current registrations, not a lifetime signup counter. Deleting a free registration frees capacity. New paid-eligible entries remain `pending` until a signed `checkout.session.completed` with `payment_status=paid` and matching `client_reference_id` changes them to `paid`; free entries remain free. `customer.subscription.deleted` returns a matching entry to pending and stops it. The server does not handle every Stripe billing event, such as payment failures.
+TikTok signup checks profile hydration even when offline. A missing/unavailable account is rejected; network failures or inconclusive profile responses allow signup with a warning. Twitch signup checks syntax only. Reusing exactly the same webhook preserves token, plan, subscription and creation time, updating identity/channel fields. The first `FREE_SLOTS` registrations are `founder`; later registrations are `free` and immediately run only the first saved channel (signup order: TikTok, Twitch, YouTube). All extra channels remain saved. A signed `checkout.session.completed` with `payment_status=paid` and matching `client_reference_id` changes a non-founder to `paid` and restarts all saved channels. `customer.subscription.deleted` returns the matching paid entry to `free` and restarts its first channel; founders are never downgraded. The server does not handle every Stripe billing event, such as payment failures.
+
+On first load, existing free/missing-plan records ordered by `created` (token breaks ties) fill founder slots. Existing pending records become free, not founders. Before the first migration write, `registrations.json` is copied byte-for-byte to `registrations.pre-founder.json`, never overwritten on retry. `founders.json` stores lifetime slot reservations and marks migration complete, so restarts never promote newer free users and deleting a founder does not reopen a slot. Back up and restore it alongside registrations; it contains private registration tokens. Reservation is saved before a new founder registration, so an interrupted write can consume a slot but never award more than the limit. Free and founder chat batches retain discovery tags; paid batches have none.
 
 Signatures use HMAC-SHA256 with a 300-second timestamp tolerance. This is not a durable event-ID replay ledger. Persistent files are `registrations.json`, `stats.json` (saved on changes at 30-second intervals), rotating `relay.log`/`.1`, and backup timestamp files `last_backup`, `last_offsite`. Tokens, webhooks and subscription IDs in registration data are private. Admin shows counts, status, failures, recent logs and backup age, refreshing in 30 seconds; ages beyond 36 hours warn.
 
@@ -118,6 +120,6 @@ Signatures use HMAC-SHA256 with a 300-second timestamp tolerance. This is not a 
 
 - `app/livechat_xr.py` without arguments launches the Windows tray app. Exact argument `--check` imports bundled TikTok events and exits without starting UI/chat.
 - `app/chat.py` without arguments uses the local config for a headless runner. Its alternate three-argument form accepts platform, channel and webhook, but puts the webhook in process arguments; prefer protected config instead. This is not the hosted relay.
-- `server/server.py` starts the HTTP relay and restores all non-pending registrations, staggering startup by 3 seconds.
+- `server/server.py` starts the HTTP relay, migrates legacy plans and restores every registration with its plan's channel limit, staggering startup by 3 seconds.
 
 See [development](development.md) for exercised local commands and [operations](operations.md) for the hosted service.

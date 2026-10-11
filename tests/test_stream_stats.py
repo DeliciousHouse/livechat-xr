@@ -18,7 +18,7 @@ class StreamStats(unittest.TestCase):
         relay = chat.relay
         tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
         for platform in chat.PLATFORMS:
-            for plan in ("free", "paid"):
+            for plan in ("free", "founder", "paid"):
                 with self.subTest(platform=platform, plan=plan), qa_relay.fixture():
                     posts, intros = [], []
 
@@ -84,9 +84,9 @@ class StreamStats(unittest.TestCase):
                     self.assertEqual([row["comments"] for row in rows], [2, 1])
                     self.assertEqual([row["distinct_chatters"] for row in rows], [2, 1])
                     self.assertEqual(intros, [platform] * 3)
-                    self.assertEqual(posts, ["Fan: first" + (tag if plan == "free" else ""), "Fan: second",
+                    self.assertEqual(posts, ["Fan: first" + (tag if plan in ("free", "founder") else ""), "Fan: second",
                                              chat.session_summary(rows[0]), chat.session_summary(rows[1]),
-                                             "x" * (2000 - len(tag)) + tag if plan == "free" else "x" * 2000])
+                                             "x" * (2000 - len(tag)) + tag if plan in ("free", "founder") else "x" * 2000])
 
     def test_summary(self):
         row: dict = dict(start="2026-10-10T00:00:00+00:00", end="2026-10-10T01:42:00+00:00",

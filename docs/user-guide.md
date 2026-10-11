@@ -59,7 +59,7 @@ Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type y
 
 If **Connect Discord** is shown, choose it and select the server/text channel you control in Discord's authorization screen. If you prefer manual setup, expand **Or paste a webhook URL instead**, use the [webhook steps below](#how-to-make-a-discord-webhook), then choose **Connect with webhook**. Without one-click connection configured, the page instead shows **Discord webhook URL** and **Connect**.
 
-You land on your private manage page. Keep its link private and bookmark it; it is also posted to the chosen Discord channel. A free registration starts listening immediately. If the free spots are taken, the page shows **waiting for payment** and plan choices. See [pricing](#pricing-and-billing). A signup confirmation is not proof that your stream or headset is connected.
+You land on your private manage page. Keep its link private and bookmark it; it is also posted to the chosen Discord channel. Every registration starts listening immediately: founders get all saved channels; later free registrations get the first channel. Extra channels are saved and shown as **waiting for upgrade**, with plan links. See [pricing](#pricing-and-billing). A signup confirmation is not proof that your stream or headset is connected.
 
 ### Step 3: Test before streaming
 
@@ -92,15 +92,17 @@ On the hosted relay, return to signup with the **same manual Discord webhook**, 
 
 ## Pricing and billing
 
-The hosted relay's first **five available free registrations** are free; after that it offers **$3 per month** or **$25 per year**. A free slot is per registration/webhook, not a coupon or five free messages. The code counts currently active free registrations, so deleting one frees a slot. An existing free registration stays free when updated with the same webhook. Availability is determined when connecting; the manage page tells you whether payment is needed. The service also has a total capacity limit and can say it is full.
+First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan (**$3 per month** or **$25 per year**). Founder slots are per registration/webhook and last forever; updating with the same webhook keeps that plan. Deleting a founder does not reopen a founder slot. The service also has a total capacity limit and can say it is full.
 
-Free relay registrations append `via LiveChat XR - livechat.deliciouswines.org` as one extra line on the first chat batch after a source connects, including reconnects. Later batches are unchanged; paid registrations have no tag. No extra Discord post is sent just for the tag.
+On the free plan, the first filled channel runs (TikTok, then Twitch, then YouTube). You may save all three; your manage page marks extra channels **waiting for upgrade**. Founders and paid users run all saved channels.
 
-If you are waiting for payment, use a plan link **on your private manage page** so Stripe can match payment to that connection. Refresh the page after payment. Do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. These prices apply to the hosted relay, not a subscription gate in the PC app.
+Free and founder relay registrations append `via LiveChat XR - livechat.deliciouswines.org` as one extra line on the first chat batch after a source connects, including reconnects. Later batches are unchanged; paid registrations have no tag. No extra Discord post is sent just for the tag.
+
+To run extra channels, use a plan link **on your private manage page** so Stripe can match payment to that connection. Once Stripe reports a paid checkout, all saved channels start without re-registration. Refresh the page after payment. Do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. These prices apply to the hosted relay; the open-source PC app stays ungated.
 
 ### How to cancel
 
-On a paid registration's manage page, select **Manage billing or cancel**. Sign in to Stripe's portal using the email used at checkout and follow its cancellation steps. Check the portal's confirmation and effective end date; forwarding pauses when Stripe reports the subscription ended. If the link is missing or the page is gone, use the billing link in your Stripe receipt or contact support without posting private links. **Stop and delete only stops chat and deletes registration; it does not cancel billing.** Cancel billing first, then use Stop and delete if you also want your data removed.
+On a paid registration's manage page, select **Manage billing or cancel**. Sign in to Stripe's portal using the email used at checkout and follow its cancellation steps. Check the portal's confirmation and effective end date; when Stripe reports the subscription ended, your first channel remains free and extra channels stay saved, waiting for upgrade. Founders are never downgraded. If the link is missing or the page is gone, use the billing link in your Stripe receipt or contact support without posting private links. **Stop and delete only stops chat and deletes registration; it does not cancel billing.** Cancel billing first, then use Stop and delete if you also want your data removed.
 
 ### Privacy
 

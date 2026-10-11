@@ -1,4 +1,5 @@
 """Relay server: input validation at the trust boundary, register/update/delete flow. No network."""
+import asyncio
 import hashlib
 import hmac
 import json
@@ -73,6 +74,7 @@ class Server(unittest.TestCase):
     def setUp(self):
         server.DATA = Path(tempfile.mkdtemp())
         server.regs.clear()
+        server.founders.clear()
         server.status.clear()
         self.check_channel = mock.Mock(return_value=True)
         patcher = mock.patch.object(server, "check_channel", self.check_channel)
@@ -272,27 +274,142 @@ class Server(unittest.TestCase):
             self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", webhook=HOOK)
             code, headers, _ = self.post("/register", name="B", email="b@example.com", platform="tiktok", channel="b1", webhook=hook2)
             token = headers["Location"].split("?")[0].rsplit("/", 1)[1]
-            self.assertEqual(server.regs[token]["plan"], "pending")
-            self.assertEqual(len(self.started), 1)  # the pending one is not running
+            self.assertEqual(server.regs[token]["plan"], "free")
+            self.assertEqual(len(self.started), 2)
             page = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
             self.assertIn(f"https://buy.stripe.com/m?client_reference_id={token}", page)
             paid = {"type": "checkout.session.completed",
                     "data": {"object": {"client_reference_id": token, "payment_status": "paid", "subscription": "sub_1"}}}
             self.assertEqual(self.webhook_event(paid, secret="wrong"), 400)  # forged
             self.assertEqual(self.webhook_event(paid, ts=int(time.time()) - 3600), 400)  # replayed
-            self.assertEqual(server.regs[token]["plan"], "pending")
+            self.assertEqual(server.regs[token]["plan"], "free")
             self.assertEqual(self.webhook_event(paid), 200)
             self.assertEqual((server.regs[token]["plan"], self.started[-1]), ("paid", token))
-            # a free user can't be "upgraded" by someone paying with their token, and stays free
-            free_token = next(t for t, r in server.regs.items() if r["plan"] == "free")
+            # Founders never lose their lifetime entitlement.
+            free_token = next(t for t, r in server.regs.items() if r["plan"] == "founder")
             paid["data"]["object"]["client_reference_id"] = free_token
             self.webhook_event(paid)
-            self.assertEqual(server.regs[free_token]["plan"], "free")
+            self.assertEqual(server.regs[free_token]["plan"], "founder")
             gone = {"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_1"}}}
             self.assertEqual(self.webhook_event(gone), 200)
-            self.assertEqual(server.regs[token]["plan"], "pending")
+            self.assertEqual(server.regs[token]["plan"], "free")
         finally:
             server.FREE_SLOTS, server.STRIPE_SECRET, server.PAY_MONTHLY = 5, "", ""
+
+    def live_channels(self, token):
+        relay = mock.AsyncMock(side_effect=asyncio.CancelledError)
+        with mock.patch.object(chat, "relay", relay):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(server.run(token))
+        return relay.call_args.kwargs["channels"]
+
+    def test_fifth_founder_sixth_free_upgrade_and_downgrade(self):
+        for i in range(6):
+            code, headers, _ = self.post("/register", name="QA", email="qa@example.com",
+                                         tiktok="ann1", twitch="someone", youtube="third",
+                                         webhook=HOOK[:-1] + str(i))
+            self.assertEqual(code, 303)
+        tokens = list(server.regs)
+        founder, token = tokens[4:]
+        self.assertEqual(server.plan(server.regs[founder]), "founder")
+        self.assertEqual(len(self.live_channels(founder)), 3)
+        self.assertEqual(server.plan(server.regs[token]), "free")
+        self.assertEqual(self.live_channels(token), {"tiktok": "@ann1"})
+        self.assertEqual(self.started, tokens)
+        with mock.patch.object(server, "STRIPE_SECRET", "whsec_test"), \
+                mock.patch.object(server, "PAY_MONTHLY", "https://buy.stripe.com/m"), \
+                mock.patch.object(server, "PAY_YEARLY", "https://buy.stripe.com/y"):
+            body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+            self.assertIn("Twitch:</b> someone — waiting for upgrade", body)
+            self.assertIn("YouTube:</b> @third — waiting for upgrade", body)
+            for link in ("m", "y"):
+                self.assertIn(f"https://buy.stripe.com/{link}?client_reference_id={token}", body)
+            paid = {"type": "checkout.session.completed", "data": {"object": {
+                "client_reference_id": token, "payment_status": "paid", "subscription": "sub_1"}}}
+            self.assertEqual(self.webhook_event(paid), 200)
+            self.assertEqual(server.plan(server.regs[token]), "paid")
+            self.assertEqual(len(self.live_channels(token)), 3)
+            self.assertEqual(self.started[-1], token)
+            gone = {"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_1"}}}
+            self.assertEqual(self.webhook_event(gone), 200)
+            self.assertEqual(server.plan(server.regs[token]), "free")
+            self.assertEqual(self.live_channels(token), {"tiktok": "@ann1"})
+            self.assertEqual(len(server.channels(server.regs[token])), 3)
+            self.assertEqual(self.started[-1], token)
+            self.assertIn("5/5 founders, 1 free, 0 paid, 1 waiting upgrade", server.admin_body())
+        self.post(f"/m/{founder}/delete")
+        server.regs.clear()
+        server.founders.clear()
+        server.load_registrations()
+        self.assertEqual(server.plan(server.regs[token]), "free")
+        self.post("/register", name="QA", email="qa@example.com", twitch="single", webhook=HOOK[:-1] + "6")
+        single = self.started[-1]
+        self.assertEqual(server.plan(server.regs[single]), "free")
+        self.assertEqual(self.live_channels(single), {"twitch": "single"})
+
+    def test_migration_preserves_four_founders_and_backup(self):
+        original = {str(i): dict(platform="tiktok", channel="@ann1", created=4-i,
+                                channels={"tiktok": "@ann1", "twitch": "someone"},
+                                **({"plan": "free"} if i % 2 else {})) for i in range(4)}
+        original["pending"] = dict(platform="twitch", channel="waiting", created=0, plan="pending")
+        original["paid"] = dict(platform="twitch", channel="payer", created=0, plan="paid")
+        server.write_json("registrations.json", original)
+        before = (server.DATA / "registrations.json").read_bytes()
+        server.load_registrations()
+        self.assertEqual((server.DATA / "registrations.pre-founder.json").read_bytes(), before)
+        for i in range(4):
+            self.assertEqual(server.plan(server.regs[str(i)]), "founder")
+            self.assertEqual(len(self.live_channels(str(i))), 2)
+        self.assertEqual(server.plan(server.regs["pending"]), "free")
+        self.assertEqual(server.plan(server.regs["paid"]), "paid")
+        migrated = (server.DATA / "registrations.json").read_bytes()
+        server.regs.clear()
+        server.founders.clear()
+        server.load_registrations()
+        self.assertEqual((server.DATA / "registrations.json").read_bytes(), migrated)
+        self.assertEqual((server.DATA / "registrations.pre-founder.json").read_bytes(), before)
+
+    def test_migration_orders_by_created_with_token_tiebreak(self):
+        server.write_json("registrations.json", {t: dict(created=i, plan="free")
+                                                 for t, i in [("z", 0), ("a", 0), ("b", 1)]})
+        with mock.patch.object(server, "FREE_SLOTS", 1):
+            server.load_registrations()
+        self.assertEqual(server.plan(server.regs["a"]), "founder")
+        self.assertEqual(server.plan(server.regs["z"]), "free")
+
+    def test_migration_backup_failure_prevents_writes(self):
+        server.write_json("registrations.json", {"old": dict(created=1, plan="free")})
+        before = (server.DATA / "registrations.json").read_bytes()
+        original_open = Path.open
+        def open_backup(path, mode="r", *args, **kwargs):
+            if path.name == "registrations.pre-founder.json" and mode == "xb":
+                raise PermissionError("backup denied")
+            return original_open(path, mode, *args, **kwargs)
+        with mock.patch.object(Path, "open", open_backup):
+            with self.assertRaises(PermissionError):
+                server.load_registrations()
+        self.assertEqual((server.DATA / "registrations.json").read_bytes(), before)
+        self.assertFalse((server.DATA / "founders.json").exists())
+
+    def test_migration_resumes_after_reservation_write(self):
+        server.write_json("registrations.json", {"old": dict(created=1, plan="free")})
+        with mock.patch.object(server, "save", side_effect=OSError):
+            with self.assertRaises(OSError):
+                server.load_registrations()
+        server.regs.clear()
+        server.founders.clear()
+        server.load_registrations()
+        self.assertEqual(server.plan(server.regs["old"]), "founder")
+
+    def test_pricing_and_founder_manage_copy(self):
+        self.assertIn("First 5 streamers: everything free.", server.home().decode())
+        self.assertIn("After that: 1 channel free, multiple channels on a paid plan", server.home().decode())
+        with mock.patch.object(server, "FREE_SLOTS", 1):
+            self.assertIn("First 1 streamer: everything free.", server.home().decode())
+        _, headers, _ = self.post("/register", name="QA", email="qa@example.com", twitch="single", webhook=HOOK)
+        body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        self.assertIn("Founder: all your channels free forever.", body)
+        self.assertNotIn("client_reference_id", body)
 
     def test_discord_one_click(self):
         server.DISCORD_ID, server.PUBLIC_URL = "123", "https://relay.example"
@@ -315,7 +432,7 @@ class Server(unittest.TestCase):
                 r = e
             self.assertEqual(r.code, 303)  # redirect to the manage page
             (token, reg), = server.regs.items()
-            self.assertEqual((reg["webhook"], reg["channel"], reg["plan"]), (HOOK, "@a1", "free"))
+            self.assertEqual((reg["webhook"], reg["channel"], reg["plan"]), (HOOK, "@a1", "founder"))
             with self.assertRaises(urllib.error.HTTPError):  # a state works once
                 bad(f"{self.base}/discord/callback?state={q['state']}&code=good")
         finally:

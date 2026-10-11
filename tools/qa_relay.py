@@ -42,6 +42,7 @@ def start(token, delay=0):
 def reset():
     with server.lock:
         server.regs.clear()
+        server.founders.clear()
         server.status.clear()
         server.stats.clear()
         server.oauth.clear()
@@ -94,7 +95,7 @@ def fixture(port=0):
         values = dict(DATA=Path(data), FREE_SLOTS=1, MAX_REGS=2, PAY_MONTHLY="/qa-payment/monthly",
                       PAY_YEARLY="/qa-payment/yearly", BILLING_URL="/qa-payment/billing", PUBLIC_URL="",
                       STRIPE_SECRET="", DISCORD_ID="", DISCORD_SECRET="", GOOGLE_ID="", GA_ID="", ADMIN_KEY="",
-                      regs={}, status={}, stats={}, tasks={}, oauth={}, check_channel=check_channel,
+                      regs={}, founders=set(), status={}, stats={}, tasks={}, oauth={}, check_channel=check_channel,
                       check_webhook=check_webhook, start=start, stop=lambda token: server.status.pop(token, None))
         for key, value in values.items():
             stack.enter_context(mock.patch.object(server, key, value))

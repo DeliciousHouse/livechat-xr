@@ -15,7 +15,7 @@ The PC banner batches comments (seven seconds and three selected lines by defaul
 
 - **PC:** download `LiveChatXR-Setup-<version>.exe` from release **Assets**, run it, enter your TikTok handle, Twitch channel and/or YouTube handle in Settings, save, start the chosen game and **Send test banner**. YouTube chat is read from your channel's public live page (Super Chats and memberships show in gold); no API key or login is needed, and your own messages are skipped. The installer is unsigned; verify its source before accepting a Windows warning. Restart the game after placement/game-list changes.
 - **Standalone:** install Discord from Meta Horizon Store, sign in, connect your channel at the hosted relay, then **Send test message** on your private manage page. Verify the actual Discord channel first, then notifications outside and inside the game. No unofficial APK is required.
-- **Hosted pricing:** first five available free registrations, then **$3/month** or **$25/year**. Your manage page confirms whether payment is needed. The PC app has no subscription gate. [Billing and cancellation](docs/user-guide.md#pricing-and-billing) · [Privacy](https://livechat.deliciouswines.org/privacy).
+- **Hosted pricing:** First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan (**$3/month** or **$25/year**). Founders keep all channels free forever. The open-source PC app has no subscription gate. [Billing and cancellation](docs/user-guide.md#pricing-and-billing) · [Privacy](https://livechat.deliciouswines.org/privacy).
 
 ## Turn TikTok LIVE viewers into followers (PC app)
 

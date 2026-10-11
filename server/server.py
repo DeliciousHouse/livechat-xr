@@ -1,9 +1,9 @@
 """LiveChat XR relay server: people enter their TikTok/Twitch channel and a Discord webhook; the server
 posts their stream chat to that Discord channel. The Discord app on a standalone Quest pops it up in-game.
 
-Billing: the first FREE_SLOTS sign-ups are free. Later sign-ups are saved as "pending" and start only
-after Stripe reports a paid checkout for them (Payment Link + client_reference_id = their token, verified
-via the signed /stripe-webhook). A cancelled subscription stops the relay again.
+Billing: the first FREE_SLOTS sign-ups are founders with all channels free forever. Later sign-ups
+run one channel free; a signed Stripe paid checkout enables all saved channels. A cancelled
+subscription returns to one free channel without deleting the others.
 
 No accounts: the webhook URL is the credential (whoever has it can already post there). Registering the
 same webhook again updates it. Each registration gets a private manage link, which is also posted into
@@ -55,7 +55,8 @@ LABEL = {"tiktok": "TikTok", "twitch": "Twitch", "youtube": "YouTube"}
 log = logging.getLogger("relay")
 
 regs: dict[str, dict] = {}      # token -> {name, email, platform, channel, webhook, discord_channel, created,
-                                #           plan: free|paid|pending, subscription}
+                                #           plan: founder|free|paid, subscription}
+founders: set[str] = set()     # lifetime slot reservations; deleting a registration does not reopen one
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; saved to stats.json every 30 s
@@ -112,6 +113,37 @@ def save() -> None:
     write_json("registrations.json", regs)
 
 
+def load_registrations() -> None:
+    path = DATA / "registrations.json"
+    try:
+        original = path.read_bytes()
+    except FileNotFoundError:
+        original = b"{}"
+    regs.update(json.loads(original))
+    try:
+        founders.update(json.loads((DATA / "founders.json").read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        # Back up before either migration write; never replace the original backup on retry.
+        backup = DATA / "registrations.pre-founder.json"
+        if path.exists() and not backup.exists():
+            with backup.open("xb") as f:
+                f.write(original)
+        legacy = json.loads(backup.read_bytes()) if backup.exists() else regs
+        founders.update(t for t, r in legacy.items() if r.get("plan") == "founder")
+        eligible = sorted((t for t, r in legacy.items() if r.get("plan", "free") == "free"),
+                          key=lambda t: (legacy[t].get("created", 0), t))
+        founders.update(eligible[:max(0, FREE_SLOTS - len(founders))])
+        write_json("founders.json", sorted(founders))
+    changed = False
+    for token, r in regs.items():
+        p = "founder" if token in founders else plan(r)
+        if r.get("plan") != p:
+            r["plan"] = p
+            changed = True
+    if changed:
+        save()
+
+
 def channels(r: dict) -> dict[str, str]:
     """{platform: channel} for a registration; pre-0.2 records only have the single platform/channel pair."""
     return r.get("channels") or {r["platform"]: r["channel"]}
@@ -122,11 +154,17 @@ def channel_label(r: dict) -> str:
 
 
 def plan(r: dict) -> str:
-    return r.get("plan", "free")  # registrations from before billing existed were free
+    p = r.get("plan", "free")
+    return "free" if p == "pending" else p
+
+
+def live_channels(r: dict) -> dict[str, str]:
+    saved = channels(r)
+    return dict(list(saved.items())[:1]) if plan(r) == "free" else saved
 
 
 def free_used() -> int:
-    return sum(plan(r) == "free" for r in regs.values())
+    return max(len(founders), sum(plan(r) == "founder" for r in regs.values()))
 
 
 def stripe_event(body: bytes, header: str, now: float | None = None) -> dict | None:
@@ -219,7 +257,7 @@ async def run(token: str, delay: float = 0) -> None:
 
     def on_batch(text: str) -> None:
         nonlocal tag_pending
-        if tag_pending and plan(r) == "free":
+        if tag_pending and plan(r) in ("free", "founder"):
             tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
             text = text[:2000 - len(tag)] + tag
         tag_pending = False
@@ -249,7 +287,7 @@ async def run(token: str, delay: float = 0) -> None:
 
     while True:
         try:
-            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=channels(r),
+            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=live_channels(r),
                              on_connect=on_connect, on_session=on_session)
         except asyncio.CancelledError:
             raise
@@ -309,6 +347,7 @@ color:#f2f2f2;font:400 14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;bo
 .qn .bd{color:#d9dadd;white-space:pre-line}
 .cap{margin:8px 0 18px;font-size:13px;line-height:20px;color:var(--faint)}
 .chip{display:inline-block;padding:6px 14px;border-radius:999px;background:var(--chip);border:1px solid #ffc44055;color:var(--accent-soft);font-size:14px;font-weight:600}
+.pricing{color:var(--text-2);margin:12px 0 0}
 .card{margin-top:28px;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:30px}
 .step{display:grid;grid-template-columns:38px 1fr;gap:16px;padding-bottom:26px;position:relative}
 .step:last-child{padding-bottom:0}
@@ -368,7 +407,8 @@ BigFan: nice shot!
 Mike: GG
 +2 more</div></div></div>
 <figcaption class="cap" data-pretext>What you see in the headset: a normal Quest notification, mid-game.</figcaption></figure>
-<span class="chip">First spots free · then $3/month</span>
+<span class="chip">First {free_slots} streamer{plural}: everything free.</span>
+<p class="pricing">After that: 1 channel free, multiple channels on a paid plan ($3/month or $25/year).</p>
 <p class="hint">Free posts carry a one-line tag; paid posts do not.</p></div>
 {msg}
 <form class="card" method="post" action="/register" aria-label="Set up LiveChat XR for Discord">
@@ -379,7 +419,8 @@ maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle or youtube.com URL"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-<div class="hint">Fill in any of them: chat from all of them lands in the same Discord channel.</div>
+<div class="hint">Fill in any of them. On the free plan, only the first filled channel runs (TikTok, then Twitch, then YouTube).
+Founders and paid plans run all saved channels in the same Discord channel.</div>
 {google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
 <div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
 </div></section>
@@ -479,6 +520,7 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
                   'gwho.textContent="Signed in with Google ✔"}</script>')
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
     return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note, icon=DISCORD_ICON,
+                            free_slots=FREE_SLOTS, plural="" if FREE_SLOTS == 1 else "s",
                             **values) + PRETEXT_JS, ga="/")
 
 
@@ -553,7 +595,7 @@ def admin_body() -> str:
         g = " (Google)" if r.get("signin") == "google" else ""
         rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}{g}</small></td>"
                     f"<td>{e(channel_label(r))}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
-                    f"<td>{plan(r)}</td><td>{e(status.get(t, 'stopped' if plan(r) == 'pending' else ''))}</td>"
+                    f"<td>{plan(r)}</td><td>{e(status.get(t, ''))}</td>"
                     f"<td>{st.get('posts', 0)}<br><small>{ago(st.get('last_post', 0))}</small></td>"
                     f"<td{' style=color:#ff8a8a' if st.get('fails') else ''}>{st.get('fails', 0)}"
                     f"<br><small>{e(st.get('last_error', ''))}</small></td>"
@@ -565,8 +607,9 @@ def admin_body() -> str:
     warn = sum(lvl in ("WARNING", "ERROR", "CRITICAL") for _, lvl, _, _ in logbuf)
     return ('<meta http-equiv="refresh" content="30"><style>main{max-width:1100px}td{vertical-align:top;border-top:1px solid #333}'
             'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
-            f'<div class="box">{len(regs)} sign-ups: {free_used()}/{FREE_SLOTS} free, {paid} paid, '
-            f'{sum(plan(r) == "pending" for r in regs.values())} waiting for payment. {live} live right now. '
+            f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
+            f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
+            f'{sum(plan(r) == "free" and len(channels(r)) > 1 for r in regs.values())} waiting upgrade. {live} live right now. '
             f'{warn} warnings in the recent log.<br>{backup_line()} <small>Refreshes every 30 s.</small></div>'
             '<table cellpadding=6 width=100%><tr><th>User</th><th>Channel</th><th>Plan</th><th>Status</th><th>Posts</th>'
             f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table>'
@@ -596,18 +639,22 @@ class Handler(BaseHTTPRequestHandler):
         if "TikTok: can't find" in st:
             msg += note("To correct your channel, use Set up another channel below with the same Discord webhook. "
                         "This updates your existing registration; no need to delete it.")
-        if plan(r) == "pending":
-            st = "waiting for payment"
+        if plan(r) == "free":
             q = f"?client_reference_id={token}&prefilled_email={quote(r['email'])}"
-            billing = ('<div class="box"><b>The free spots are taken.</b> Pick a plan to switch it on. It starts within a '
-                       'minute of paying; refresh this page to check.<br>'
-                       f'<a href="{html.escape(PAY_MONTHLY + q)}"><button>$3 / month</button></a> '
-                       f'<a href="{html.escape(PAY_YEARLY + q)}"><button>$25 / year</button></a></div>')
+            links = " · ".join(f'<a href="{html.escape(url + q)}">{label}</a>'
+                               for url, label in ((PAY_MONTHLY, "$3 / month"), (PAY_YEARLY, "$25 / year")) if url)
+            billing = ('<div class="box"><b>Free plan: one channel live.</b> Extra channels stay saved until you upgrade. '
+                       'After payment, refresh this page to check.<br>'
+                       + (links or 'Upgrade links are not configured; your first channel stays live.') + '</div>')
+        elif plan(r) == "founder":
+            billing = '<div class="box"><b>Founder: all your channels free forever.</b> No payment needed.</div>'
         elif plan(r) == "paid" and BILLING_URL:
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
         self.send(200, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
-            channels="<br>".join(f"<b>{LABEL[p]}:</b> {html.escape(c)}" for p, c in channels(r).items()),
+            channels="<br>".join(f"<b>{LABEL[p]}:</b> {html.escape(c)}"
+                                 + (" — waiting for upgrade" if p not in live_channels(r) else "")
+                                 for p, c in channels(r).items()),
             dname=html.escape(r["discord_channel"]),
             status=html.escape(st), billing=billing),
             ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else ""))
@@ -684,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             token = obj.get("client_reference_id") or ""
             with lock:
                 r = regs.get(token)
-                if r and plan(r) != "free":
+                if r and plan(r) != "founder":
                     r.update(plan="paid", subscription=obj.get("subscription"))
                     save()
             if r and plan(r) == "paid":
@@ -692,13 +739,15 @@ class Handler(BaseHTTPRequestHandler):
                 chat.post_discord(r["webhook"], "LiveChat XR: payment received ✔ It's on. Chat shows up here while you're live.")
         elif ev.get("type") == "customer.subscription.deleted":
             with lock:
-                token = next((t for t, r in regs.items() if r.get("subscription") == obj.get("id")), None)
+                token = next((t for t, r in regs.items() if obj.get("id") and r.get("subscription") == obj["id"]
+                              and plan(r) == "paid"), None)
                 if token:
-                    regs[token]["plan"] = "pending"
+                    regs[token]["plan"] = "free"
                     save()
             if token:
-                stop(token)
-                chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended, so chat posting is paused. "
+                start(token)
+                chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended. Your first channel stays free; "
+                                                          "extra channels are saved, waiting for upgrade. "
                                                           f"Renew here: <{manage_url(token)}>")
         self.send(200, b"ok")
 
@@ -758,18 +807,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(503, home(note("This server is full right now. Try again later.", True)))
             old = regs.get(token, {}) if token else {}
             token = token or secrets.token_urlsafe(24)
-            p = plan(old) if old else ("free" if free_used() < FREE_SLOTS else "pending")
+            p = plan(old) if old else ("founder" if free_used() < FREE_SLOTS else "free")
+            if p == "founder" and token not in founders:
+                founders.add(token)
+                write_json("founders.json", sorted(founders))
             platform, channel = next(iter(wanted.items()))  # primary pair kept for older readers (admin exports, QA tools)
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "channels": wanted, "webhook": webhook,
                            "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p,
                            "signin": form.get("signin") or "email", "channel_note": channel_note}
             save()
-        if p == "pending":
-            chat.post_discord(webhook, f"LiveChat XR: almost done. Pick a plan to switch on chat from {channel_label(regs[token])}: <{manage_url(token)}>")
-        else:
-            start(token)
-            chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {channel_label(regs[token])} will show up here while you're live.\n"
-                                       f"Manage or stop it: <{manage_url(token)}>")
+        start(token)
+        active = " · ".join(f"{LABEL[p]} {c}" for p, c in live_channels(regs[token]).items())
+        waiting = " Extra channels are saved, waiting for upgrade." if len(wanted) > len(live_channels(regs[token])) else ""
+        chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {active} will show up here while you're live.{waiting}\n"
+                                   f"Manage or stop it: <{manage_url(token)}>")
         self.send(303, b"", location=f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
@@ -792,11 +843,8 @@ def main() -> None:
         logging.getLogger().addHandler(h)
     loop.create_task(save_stats_loop())
     logging.getLogger("httpx").setLevel(logging.WARNING)  # TikTokLive logs every request URL
-    try:
-        regs.update(json.loads((DATA / "registrations.json").read_text(encoding="utf-8")))
-    except FileNotFoundError:
-        pass
-    for i, token in enumerate(t for t, r in regs.items() if plan(r) != "pending"):
+    load_registrations()
+    for i, token in enumerate(regs):
         start(token, delay=i * 3)
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

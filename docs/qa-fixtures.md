@@ -10,7 +10,7 @@ Python's standard library is sufficient; no credentials or third-party packages 
 python tools\qa_relay.py --port 13301
 ```
 
-Open `http://127.0.0.1:13301/`. The listener is always IPv4 loopback. `--port 0` chooses an unused port and prints only the public fixture address. Every launch creates an empty disposable directory; environment-provided data directories, billing links, OAuth identities and analytics are ignored. The production Handler, validation, redirects, templates, persistence and free/pending logic are reused. Only the launcher substitutes profile lookup, Discord validation/posting and chat start/stop. Outbound urllib requests fail closed. The page's CSP also prevents external scripts and cross-origin form submissions.
+Open `http://127.0.0.1:13301/`. The listener is always IPv4 loopback. `--port 0` chooses an unused port and prints only the public fixture address. Every launch creates an empty disposable directory; environment-provided data directories, billing links, OAuth identities and analytics are ignored. The production Handler, validation, redirects, templates, persistence and founder/free/paid logic are reused. Only the launcher substitutes profile lookup, Discord validation/posting and chat start/stop. Outbound urllib requests fail closed. The page's CSP also prevents external scripts and cross-origin form submissions.
 
 Use the prefilled typed identity `QA Fixture` / `qa@example.invalid` (not Google sign-in). The non-secret webhook field handles are `fixture-one` and `fixture-two`. The launcher constructs their inert, syntax-valid values internally and replaces them with handles in retained-value HTML; do not extract or screenshot webhook values or manage tokens. Obtain manage pages through the normal registration redirect, not a printed token. Capture the page content only, excluding browser address bars and raw HTML.
 
@@ -27,9 +27,9 @@ Other syntactically valid names simulate existing offline profiles. None of thes
 ### Journey and cleanup
 
 1. Submit a blank channel; correct it to invalid syntax, then `@qa_nonexistent`. Check inline errors and retained identity/webhook fields.
-2. Correct it to `@qa_offline` with `fixture-one`. Follow the normal redirect; the first registration is free.
+2. Correct it to `@qa_offline` with `fixture-one`. Follow the normal redirect; the first registration is a founder (the fixture has one founder slot).
 3. Use **Set up another channel**, submit `https://www.tiktok.com/@qa_lookup_error` with `fixture-one`. Confirm the same manage page is updated in place and shows the inconclusive-lookup note. Use **Send test message**; the result explicitly says no Discord message was sent.
-4. Register `qa_offline` with `fixture-two`. The second registration is pending, not running. Plan links lead only to `/qa-payment/monthly` or `/qa-payment/yearly` on this listener and say no payment is collected. They do not upgrade the registration.
+4. Register `qa_offline` with `fixture-two`. The second registration is free, with one simulated channel active. Add Twitch/YouTube to see extra channels waiting for upgrade. Plan links lead only to `/qa-payment/monthly` or `/qa-payment/yearly` on this listener and say no payment is collected. They do not upgrade the registration.
 5. Delete both registrations through **Stop and delete**. `/health` must read `ok 0`.
 
 Safe reset (only this process's temporary data):
