@@ -40,7 +40,7 @@ class RelayFixture(unittest.TestCase):
 
         with qa_relay.fixture():
             self.assertIn("Free posts carry a one-line tag; paid posts do not.", server.home().decode())
-            for platform, plan in [(p, tier) for p in chat.PLATFORMS for tier in ("free", "paid")]:
+            for platform, plan in [(p, tier) for p in chat.PLATFORMS for tier in ("free", "founder", "paid")]:
                 with self.subTest(platform=platform, plan=plan):
                     server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan,
                                              webhook=qa_relay.HOOKS["fixture-one"])
@@ -59,7 +59,7 @@ class RelayFixture(unittest.TestCase):
                         asyncio.run(go())
                     posts = [text for text in posts if not text.startswith("Stream ended")]
                     self.assertEqual(posts, ["Fan: first" + tag, "Fan: second",
-                                             "x" * (2000 - len(tag)) + tag, "Fan: fourth"] if plan == "free"
+                                             "x" * (2000 - len(tag)) + tag, "Fan: fourth"] if plan in ("free", "founder")
                                      else ["Fan: first", "Fan: second", "x" * 2000, "Fan: fourth"])
 
     def test_launcher_flow(self):
@@ -92,7 +92,8 @@ class RelayFixture(unittest.TestCase):
             pending = second.split("?")[0]
             self.assertEqual(code, 303)
             body = request(pending)[2]
-            self.assertIn("waiting for payment", body)
+            self.assertIn("Free plan: one channel live", body)
+            self.assertIn("Simulated: account exists, offline", body)
             self.assertNotIn("buy.stripe.com", body)
             self.assertIn('href="/qa-payment/monthly?', body)
             self.assertIn("No payment is collected", request("/qa-payment/monthly")[2])

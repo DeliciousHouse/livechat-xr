@@ -34,7 +34,7 @@ The layer selects executable basenames at its first handshake. Only matching pro
 
 ## Relay boundary
 
-The relay uses Python's threaded HTTP server and one asyncio loop for stream connections. Registration requests persist JSON under a lock and schedule per-registration chat tasks. Discord posting runs on short-lived threads rather than blocking the chat coroutine. Startup restores non-pending entries and staggers connection attempts to reduce signing-service bursts.
+The relay uses Python's threaded HTTP server and one asyncio loop for stream connections. Registration requests persist JSON under a lock and schedule per-registration chat tasks. Discord posting runs on short-lived threads rather than blocking the chat coroutine. Startup migrates legacy plans, restores every registration with its channel limit and staggers connection attempts to reduce signing-service bursts.
 
 A small JSON store avoids a database service. Atomic file replacement avoids partial files, but this is a single-process design: do not run multiple replicas against one volume. Failed Discord posts are dropped instead of building an unbounded queue. A busy chat is summarized into a batch rather than delivering each message separately.
 
@@ -42,7 +42,7 @@ A small JSON store avoids a database service. Atomic file replacement avoids par
 
 A private manage token is the access credential, not an account password. The webhook identifies an existing registration when updating it. Google optionally verifies name/email; manually entered email is not verified. Discord authorization can create the channel webhook instead of requiring manual copying.
 
-Free registrations run immediately. Later registrations wait for a signed Stripe paid-checkout event. Deletion and subscription cancellation are separate actions because the relay is not a Stripe billing client. Keep tokens and webhook URLs private. See [reference](reference.md) for the exact HTTP/config interface and [user guide](user-guide.md) for cancellation.
+Founders run all saved channels free forever. Later free registrations run their first channel immediately; a signed Stripe paid checkout starts all saved channels. Subscription deletion returns paid users to one free channel without losing extra saved channels. Deletion and subscription cancellation are separate actions because the relay is not a Stripe billing client. Keep tokens and webhook URLs private. See [reference](reference.md) for the exact HTTP/config interface and [user guide](user-guide.md) for cancellation.
 
 ## What this does not prove
 
