@@ -46,6 +46,69 @@ curl -X POST http://127.0.0.1:13301/__qa/stop
 
 Orderly shutdown removes the entire launcher-owned temporary directory. Restart always starts empty. If the process is forcibly killed, remove only its generated `livechatxr-qa-*` directory after verifying its PID is stopped; never remove a supplied or production data directory. The launcher does not print tokens, webhook values or submitted form data.
 
+## Private Discord transport consumer (Q only)
+
+`tools/qa_discord.py` is separate from the simulated relay. It has no CLI arguments
+and needs only Python's standard library. Offline regression command:
+
+```bat
+python -m unittest discover -s tests -p test_qa_discord.py -v
+```
+
+Q owns provisioning, enrollment, installation and any live invocation on controller
+`t_e69bce14`. Source/tests alone are not live transport or launch acceptance. Do not
+use a production webhook, copy registrations, or grant another profile access.
+
+After sole-reviewer merge and green exact-head CI, Q installs the reviewed source
+`tools/qa_discord.py` in a fixed, controller-owned directory and pins its commit/hash.
+No app dependencies, installer, elevation, gateway restart or fleet change is needed
+to run this standalone consumer. Q verifies the private test guild/channel separately.
+The fixed process inherits exactly these inputs from Q's approved deployment:
+
+| Environment key | Source |
+| --- | --- |
+| `LIVECHAT_XR_QA_DISCORD_WEBHOOK` | Approved machine-service secret; never argv, config or logs |
+| `LIVECHAT_XR_QA_DISCORD_GUILD_ID` | Exact non-secret allowlisted private test guild ID |
+| `LIVECHAT_XR_QA_DISCORD_CHANNEL_ID` | Exact non-secret allowlisted private test channel ID |
+
+For approved Secrets Manager enrollment, Q uses the existing writer with the value
+already in its environment (never paste it into a command or retrieve it into output):
+
+```bat
+C:/Users/bkam/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe C:/Users/bkam/AppData/Local/hermes/scripts/bws_write.py LIVECHAT_XR_QA_DISCORD_WEBHOOK --value-env LIVECHAT_XR_QA_DISCORD_WEBHOOK
+```
+
+Proposed launch contract, not an installed broker target: fixture handle
+`livechat-xr-discord-qa`; executable Q's approved Python; sole argument the fixed
+absolute installed `qa_discord.py` path; no caller-controlled arguments, shell,
+destination, text, operations or environment overrides. Bind the inherited secret
+to this consumer only, and bind both non-secret IDs in Q-owned configuration. Retain
+the protected target map and existing per-use approval controls if Q registers a
+trusted consumer; do not edit those maps or expand profile access from this runbook.
+Missing registration/secret plumbing stays with Q, not a manual credential request.
+
+The consumer strictly accepts only unversioned `https://discord.com/api/webhooks/`
+URLs, checks metadata against both IDs before any write, and never follows redirects
+or uses environment proxies. Five HTTP operations maximum, five-second socket
+timeouts, bounded 64 KiB response bodies, no retries. It posts one fixed synthetic
+message with mentions disabled, checks the returned identity/content, independently
+reads that exact message, deletes only that ID, then requires a 404 readback.
+Even a failed readback triggers cleanup of the known test-created ID. An ambiguous
+DELETE still gets independent readback; `deleted` records acknowledged DELETE,
+whereas `cleanup` records confirmed absence. An ambiguous POST or invalid POST
+identity cannot safely identify a message to delete: cleanup remains false and
+there is no retry, history enumeration or broad deletion. Q must investigate the
+private fixture out of band before deciding on another approved run.
+
+Stdout is one redacted JSON receipt and exit status is zero only for `error_code=ok`.
+It contains fixture handle, matched-scope/posted/readback/deleted/cleanup booleans,
+last observed HTTP status (null when none), and a static error code. Before any
+POST attempt, `cleanup=true` means no message was created; after a POST attempt it
+means independent 404 proof only. Never retain request URLs, bodies, identity data,
+tokens or exception text. Share only this receipt plus reviewed commit/CI evidence.
+This does not prove Google/OAuth, Stripe, Quest/headset, five-minute delivery or
+canonical UI acceptance, and changes no production relay state.
+
 ## Windows: visible alternate-profile Settings
 
 Install source dependencies in a repository-local virtual environment, not the installed application's directory:
