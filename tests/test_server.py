@@ -355,7 +355,7 @@ class Server(unittest.TestCase):
         self.assertEqual(self.live_channels(single), {"twitch": "single"})
 
     def test_migration_preserves_four_founders_and_backup(self):
-        original = {str(i): dict(platform="tiktok", channel="@ann1", created=4-i,
+        original = {str(i): dict(platform="tiktok", channel="@ann1", created=4-i, webhook=HOOK,
                                 channels={"tiktok": "@ann1", "twitch": "someone"},
                                 **({"plan": "free"} if i % 2 else {})) for i in range(4)}
         original["pending"] = dict(platform="twitch", channel="waiting", created=0, plan="pending")

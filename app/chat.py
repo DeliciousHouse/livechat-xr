@@ -15,6 +15,8 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -75,7 +77,7 @@ def write_banner(text: str) -> None:
     os.replace(tmp, DIR / "banner.txt")  # atomic: the layer never reads a half-written file
 
 
-def post_discord(webhook: str, text: str, *, on_error=None) -> bool:
+def post_discord(webhook: str, text: str, *, on_error=None, on_retry=None) -> bool:
     """Post one batch to a Discord channel webhook. Discord's own app shows it as a notification
     (on Quest that includes pop-ups during games), which is the standalone/companion display path."""
     body = json.dumps({
@@ -88,12 +90,105 @@ def post_discord(webhook: str, text: str, *, on_error=None) -> bool:
     try:
         urllib.request.urlopen(req, timeout=10).close()
         return True
-    except Exception as e:  # 429 = Discord rate limit (30/min/channel); drop rather than pile up
+    except Exception as e:
         code = getattr(e, "code", 0)
+        if isinstance(e, urllib.error.HTTPError) and code == 429 and on_retry:
+            delay = 1.0
+            try:
+                delay = float(e.headers.get("Retry-After") or json.load(e).get("retry_after", 1))
+            except (ValueError, TypeError, AttributeError, OSError):
+                pass
+            on_retry(max(0.01, delay))
         log.warning("discord post failed: %s", code or type(e).__name__)
         if on_error:
             on_error(code)
         return False
+
+
+class DiscordQueue:
+    """One ordered sender per webhook; HTTP never blocks chat collection.
+
+    Entries count original chat lines, not fragments or service notifications.
+    Only unsent entries older than 60 seconds may be collapsed.
+    """
+    def __init__(self, webhook, on_delivery=None):
+        self.webhook, self.on_delivery = webhook, on_delivery
+        self.pending, self.sent = deque(), deque()
+        self.ready, self.idle = asyncio.Event(), asyncio.Event()
+        self.idle.set()
+
+    def report(self, **counts):
+        if self.on_delivery:
+            self.on_delivery(**counts)
+
+    def put(self, lines, platforms=(), suffix="", *, count=True):
+        now = time.monotonic()
+        group = object()
+        self.report(received=len(lines) if count else 0)
+        for line, counted in [(line, int(count)) for line in lines] + ([(suffix, 0)] if suffix else []):
+            # Split on physical lines, then UTF-16 boundaries (Discord counts emoji as two).
+            pieces = []
+            for physical in line.split("\n"):
+                raw = physical.encode("utf-16-le")
+                while raw:
+                    end = min(len(raw), 4000)
+                    if 0xD800 <= int.from_bytes(raw[end - 2:end], "little") <= 0xDBFF:
+                        end -= 2
+                    pieces.append(raw[:end].decode("utf-16-le"))
+                    raw = raw[end:]
+                if not physical:
+                    pieces.append("")
+            for i, piece in enumerate(pieces):
+                self.pending.append((now, piece, counted if i == len(pieces) - 1 else 0, tuple(platforms), group))
+        if self.pending:
+            self.idle.clear()
+            self.ready.set()
+
+    async def join(self):
+        await self.idle.wait()
+
+    async def run(self):
+        while True:
+            await self.ready.wait()
+            now = time.monotonic()
+            while self.sent and now - self.sent[0] >= 60:
+                self.sent.popleft()
+            if len(self.sent) >= 25:
+                await asyncio.sleep(max(0.01, 60 - (now - self.sent[0])))
+                continue
+            dropped = 0
+            while self.pending and now - self.pending[0][0] > 60:
+                dropped += self.pending.popleft()[2]
+            if dropped:
+                self.pending.appendleft((now, f"+{dropped} earlier messages", 0, (), object()))
+                self.report(dropped_backlog=dropped)
+            if not self.pending:
+                self.ready.clear()
+                self.idle.set()
+                continue
+            entries, size = [], 0
+            for entry in self.pending:
+                length = len(entry[1].encode("utf-16-le")) // 2
+                if entries and (entry[4] is not entries[0][4] or len(entries) == 5 or size + 1 + length > 2000):
+                    break
+                entries.append(entry)
+                size += length + int(len(entries) > 1)
+            text = "\n".join(entry[1] for entry in entries)
+            errors, retry = [], []
+            self.sent.append(time.monotonic())  # failed attempts also consume the local budget
+            ok = await asyncio.to_thread(post_discord, self.webhook, text,
+                                         on_error=errors.append, on_retry=retry.append)
+            platforms = sorted({p for entry in entries for p in entry[3]})
+            self.report(ok=ok is not False, error=errors[0] if errors else -1, platforms=platforms,
+                        posted=sum(entry[2] for entry in entries) if ok is not False else 0)
+            if ok is False:
+                await asyncio.sleep(retry[0] if retry else 5)
+                continue
+            for _ in entries:
+                self.pending.popleft()
+            if not self.pending:
+                self.ready.clear()
+                self.idle.set()
 
 
 # ---------------------------------------------------------------- Twitch (anonymous IRC, no key needed)
@@ -610,7 +705,8 @@ async def youtube(handle: str, emit, status, tally=None, *, identity=None, on_id
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
                 sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
                 show_tag: bool = False, on_connect=None, *, on_session=None, webhook: str = "",
-                identities=None, on_identity=None, on_source_status=None, on_batch_sources=None) -> None:
+                identities=None, on_identity=None, on_source_status=None, on_batch_sources=None,
+                on_lines=None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
@@ -671,6 +767,9 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
             if queue:
                 lines = queue[:]
                 queue.clear()
+                if on_lines:
+                    on_lines([line + "  - LiveChat XR" if show_tag and line.startswith(ASK) else line
+                              for line in lines], sorted(queued_platforms))
                 text = batch(lines, max_lines, show_tag)
                 if on_batch_sources:
                     on_batch_sources(text, sorted(queued_platforms))
@@ -681,8 +780,11 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
             if s.done():
                 s.result()
     finally:
+        if queue and on_lines:
+            on_lines(queue[:], sorted(queued_platforms))
         for s in srcs:
             s.cancel()
+        await asyncio.gather(*srcs, return_exceptions=True)
 
 
 # ---------------------------------------------------------------- runner (background thread + event loop)
@@ -704,15 +806,20 @@ class Runner:
 
         def on_batch(text: str) -> None:
             write_banner(text)
-            if webhook:
-                threading.Thread(target=post_discord, args=(webhook, text), daemon=True).start()
 
-        await relay("", "", on_batch, self._set_status,
+        sender = DiscordQueue(webhook) if webhook else None
+        worker = asyncio.create_task(sender.run()) if sender else None
+        try:
+            await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
                     cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg),
                     follow_ask=cfg["chat"].get("follow_ask", ""), show_tag=show_tag,
                     on_connect=(lambda: write_banner("LiveChat XR - livechat.deliciouswines.org")) if show_tag else None,
-                    webhook=webhook)
+                    webhook=webhook, on_lines=sender.put if sender else None)
+        finally:
+            if worker:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()

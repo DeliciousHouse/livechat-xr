@@ -48,8 +48,7 @@ class RelayFixture(unittest.TestCase):
                     def thread(target, args, daemon):
                         return mock.Mock(start=lambda: target(*args))
                     with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
-                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text, **kw: posts.append(text)), \
-                            mock.patch.object(server.threading, "Thread", side_effect=thread):
+                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text, **kw: posts.append(text)):
                         async def go():
                             task = asyncio.create_task(server.run("qa"))
                             await asyncio.sleep(0.13)
@@ -59,7 +58,7 @@ class RelayFixture(unittest.TestCase):
                         asyncio.run(go())
                     posts = [text for text in posts if not text.startswith("Stream ended")]
                     self.assertEqual(posts, ["Fan: first" + tag, "Fan: second",
-                                             "x" * (2000 - len(tag)) + tag, "Fan: fourth"] if plan in ("free", "founder")
+                                             "x" * 2000, tag.lstrip("\n"), "Fan: fourth"] if plan in ("free", "founder")
                                      else ["Fan: first", "Fan: second", "x" * 2000, "Fan: fourth"])
 
     def test_launcher_flow(self):
