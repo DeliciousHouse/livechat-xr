@@ -70,7 +70,7 @@ static std::vector<uint32_t> g_pixels(W * H);  // RGBA (R in the low byte); swiz
 static bool g_dirty = false, g_bgra = false;
 static ULONGLONG g_until = 0;                  // GetTickCount64 deadline
 
-// Lines starting with the gift emoji (U+1F381) are drawn gold; everything else white.
+// Lines starting with the gift emoji (U+1F381), optionally after a platform emoji, are drawn gold; everything else white.
 static const wchar_t GIFT[] = L"\xD83C\xDF81";
 static const COLORREF WHITE = RGB(255, 255, 255), GOLD = RGB(255, 196, 64);
 
@@ -100,7 +100,8 @@ static void Rasterize(const std::wstring& text, std::vector<uint32_t>& out) {
         RECT calc = r;
         DrawTextW(dc, line.c_str(), -1, &calc, flags | DT_CALCRECT);
         DrawTextW(dc, line.c_str(), -1, &r, flags);
-        COLORREF c = line.compare(0, 2, GIFT) == 0 ? GOLD : WHITE;
+        // a platform emoji plus space (chat.ICONS) is 3 UTF-16 units, so a gift may start at 0 or 3
+        COLORREF c = line.compare(0, 2, GIFT) == 0 || (line.size() >= 5 && line.compare(3, 2, GIFT) == 0) ? GOLD : WHITE;
         for (int row = y; row < calc.bottom && row < H; ++row) rowColor[row] = c;
         y = calc.bottom;
     }

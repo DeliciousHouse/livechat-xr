@@ -178,6 +178,7 @@ class Relay(unittest.TestCase):
                 cfg = chat.load_config()
                 self.assertTrue(cfg.getboolean("chat", "show_tag"))
                 cfg["chat"][platform], cfg["chat"]["show_tag"] = "qa", str(enabled)
+                cfg["chat"]["platform_icons"] = str(enabled)  # the runner passes the PC toggle through
                 cfg["banner"]["seconds"] = "0.01"
 
                 async def go():
@@ -190,7 +191,7 @@ class Relay(unittest.TestCase):
                 asyncio.run(go())
                 texts = [c.args[0] for c in banner.call_args_list]
                 intro = "LiveChat XR - livechat.deliciouswines.org"
-                self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\nFan: hi", intro] if enabled
+                self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\n" + chat.ICONS[platform] + "Fan: hi", intro] if enabled
                                  else ["» follow me\nFan: hi"])
                 discord.assert_not_called()
 
@@ -336,6 +337,31 @@ class YouTube(unittest.TestCase):
         self.assertEqual((tally.comments, len(tally.chatters), tally.gifts), (2, 2, 1))
         self.assertEqual(sleeps, [60, 1, 1, 60])
         self.assertEqual(statuses, ["YouTube: waiting for @Me to go live", "YouTube: connected to @Me", "YouTube: @Me went offline, waiting"])
+
+    def test_platform_icons_mark_each_line_and_keep_gifts_first(self):
+        async def fake_tiktok(channel, emit, status, key="", ask=None):
+            emit("Tk: hello")
+            emit(chat.ASK + "follow me")
+            await asyncio.Event().wait()
+
+        async def fake_twitch(channel, emit, status):
+            emit("🎁 Tw cheered 100 bits")
+            await asyncio.Event().wait()
+
+        async def run(icons):
+            got = asyncio.get_running_loop().create_future()
+            task = asyncio.ensure_future(chat.relay("", "", lambda t: got.done() or got.set_result(t), lambda s: None,
+                                                    seconds=0.05, channels={"tiktok": "a", "twitch": "b"},
+                                                    platform_icons=icons))
+            try:
+                return await asyncio.wait_for(got, 2)
+            finally:
+                task.cancel()
+
+        with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch):
+            self.assertEqual(asyncio.run(run(True)), "» follow me\n🟣 🎁 Tw cheered 100 bits\n🎵 Tk: hello")
+            self.assertEqual(asyncio.run(run(False)), "» follow me\n🎁 Tw cheered 100 bits\nTk: hello")
+        self.assertTrue(chat.load_config().getboolean("chat", "platform_icons"))
 
     def test_relay_with_three_platforms_and_config(self):
         active, seen = set(), {}

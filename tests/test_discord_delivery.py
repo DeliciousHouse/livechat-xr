@@ -39,8 +39,8 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
             finally:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-        self.assertEqual(sent, ["Fan: 0\nFan: 1\nFan: 2\nFan: 3"])
-        self.assertEqual(banners, ["Fan: 0\nFan: 1\nFan: 2\n+1 more"])
+        self.assertEqual(sent, ["🟣 Fan: 0\n🟣 Fan: 1\n🟣 Fan: 2\n🟣 Fan: 3"])
+        self.assertEqual(banners, ["🟣 Fan: 0\n🟣 Fan: 1\n🟣 Fan: 2\n+1 more"])
 
     async def test_hosted_mixed_burst_records_all_ten_lines(self):
         from tests.test_account import server, HOOK
@@ -49,7 +49,7 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
         async def source(channel, emit, status, *args, **kwargs):
             for i in range(5):
                 line = f"{channel}: {i}"
-                emitted.append(line)
+                emitted.append(chat.ICONS["tiktok" if channel == "tk" else "twitch"] + line)
                 emit(line)
             await asyncio.Event().wait()
         async def fast_relay(*args, **kwargs):

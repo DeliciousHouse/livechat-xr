@@ -454,7 +454,7 @@ async def run(token: str, delay: float = 0) -> None:
                                  on_connect=on_connect, on_session=on_session, identities=r.get("identities", {}),
                                  on_identity=lambda p, found: remember_identity(token, p, found, expected=r),
                                  on_source_status=lambda p, s: source_status(token, p, s) if regs.get(token) is r else None,
-                                 on_lines=on_lines)
+                                 on_lines=on_lines, platform_icons=r.get("platform_icons", True))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -535,6 +535,7 @@ color:#f2f2f2;font:400 14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;bo
 .step.later .n{background:var(--line);color:var(--accent)}
 .step p{margin:0;color:var(--text-2)}
 label{display:block;font-size:13px;font-weight:600;color:var(--label);margin:12px 0 6px}
+label.check{display:flex;gap:8px;align-items:center;font-weight:500;color:var(--text)}
 input[type=text],input[type=email],input[type=url],input:not([type]){width:100%;padding:12px 14px;font:inherit;color:var(--text);
 border:1px solid var(--line-field);border-radius:12px;background:var(--bg)}
 input::placeholder{color:var(--placeholder)}
@@ -767,6 +768,9 @@ def settings_form(token: str, form: dict) -> str:
             '<div><label for="email">Email</label><input type="email" id="email" name="email" '
             f'value="{e(form.get("email", ""))}" required maxlength="200" autocomplete="email"></div></div>'
             + inputs + WEBHOOK_FIELD.format(webhook="", req="").replace("https://discord.com/api/webhooks/…", "Paste a new webhook URL")
+            + '<input type="hidden" name="icons_form" value="1"><label class="check"><input type="checkbox" name="platform_icons" value="1"'
+            + (' checked' if form.get("platform_icons", True) not in (False, "") else '') + '> Start each message with a platform emoji '
+            '(🎵 TikTok, 🟣 Twitch, ▶️ YouTube)</label>'
             + '<p class="hint">Leave the webhook blank to keep the current one. Paste a new one to change Discord channels. '
             'Changing your Discord username needs no action.</p><button class="cta">Save settings</button></form>')
 
@@ -1075,7 +1079,8 @@ class Handler(BaseHTTPRequestHandler):
             platform, channel = next(iter(wanted.items()))  # primary pair kept for older readers (admin exports, QA tools)
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "channels": wanted, "webhook": webhook,
                            "discord_channel": dname, "created": old.get("created", int(time.time())), "plan": p,
-                           "signin": form.get("signin") or old.get("signin", "email"), "channel_note": channel_note}
+                           "signin": form.get("signin") or old.get("signin", "email"), "channel_note": channel_note,
+                           "platform_icons": bool(form.get("platform_icons")) if form.get("icons_form") else old.get("platform_icons", True)}
             regs[token]["identities"] = {p: ident for p, ident in old.get("identities", {}).items()
                                           if p in wanted and channels(old).get(p) == wanted[p]}
             if edit_token:

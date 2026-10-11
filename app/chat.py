@@ -23,7 +23,8 @@ from pathlib import Path
 DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
     "chat": {"tiktok": "", "twitch": "", "youtube": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "",
-             "discord_webhook": "", "follow_ask": "follow for the next sword-only run", "show_tag": "true"},
+             "discord_webhook": "", "follow_ask": "follow for the next sword-only run", "show_tag": "true",
+             "platform_icons": "true"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -59,11 +60,16 @@ def save_config(cp: configparser.ConfigParser) -> None:
 
 GIFT = "🎁 "  # the layer draws lines starting with this in gold
 ASK = "» "  # follow-ask lines take priority over gifts and comments
+ICONS = {"tiktok": "🎵 ", "twitch": "🟣 ", "youtube": "▶️ "}  # optional platform marker at the start of each line
+
+
+def _bare(line: str) -> str:
+    return next((line[len(i):] for i in ICONS.values() if line.startswith(i)), line)
 
 
 def batch(lines: list[str], max_lines: int = 3, show_tag: bool = False) -> str:
     """Merge queued lines into one banner: follow asks, gifts, then comments, up to max_lines."""
-    lines = sorted(lines, key=lambda line: (not line.startswith(ASK), not line.startswith(GIFT)))
+    lines = sorted(lines, key=lambda line: (not line.startswith(ASK), not _bare(line).startswith(GIFT)))
     shown = [line + "  - LiveChat XR" if show_tag and line.startswith(ASK) else line
              for line in lines[:max_lines]]
     extra = len(lines) - len(shown)
@@ -706,14 +712,15 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
                 sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
                 show_tag: bool = False, on_connect=None, *, on_session=None, webhook: str = "",
                 identities=None, on_identity=None, on_source_status=None, on_batch_sources=None,
-                on_lines=None) -> None:
+                on_lines=None, platform_icons: bool = False) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
     channels={"tiktok": "@a", "twitch": "b", "youtube": "@c"} reads all of them into the same batches (gifts from any
     sort before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
     follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None.
-    show_tag tags only ASK lines; on_connect fires on each source's connected status transition."""
+    show_tag tags only ASK lines; on_connect fires on each source's connected status transition.
+    platform_icons starts each chat line with its platform's ICONS emoji (follow asks stay unmarked)."""
     queue: list[str] = []
     queued_platforms: set[str] = set()
     channels = channels or {platform: channel}
@@ -752,7 +759,7 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
         if on_identity:
             kwargs.update(identity=(identities or {}).get(p, {}).copy(), on_identity=lambda found: on_identity(p, found))
         def emit(line):
-            queue.append(line)
+            queue.append(ICONS[p] + line if platform_icons and p in ICONS and not line.startswith(ASK) else line)
             queued_platforms.add(p)
         if p == "tiktok":
             if webhook:
@@ -815,7 +822,8 @@ class Runner:
                     cfg["chat"].get("tiktok_sign_api_key", ""), channels=channels(cfg),
                     follow_ask=cfg["chat"].get("follow_ask", ""), show_tag=show_tag,
                     on_connect=(lambda: write_banner("LiveChat XR - livechat.deliciouswines.org")) if show_tag else None,
-                    webhook=webhook, on_lines=sender.put if sender else None)
+                    webhook=webhook, on_lines=sender.put if sender else None,
+                    platform_icons=cfg.getboolean("chat", "platform_icons", fallback=True))
         finally:
             if worker:
                 worker.cancel()

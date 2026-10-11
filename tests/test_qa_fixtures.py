@@ -42,7 +42,7 @@ class RelayFixture(unittest.TestCase):
             self.assertIn("Free posts carry a one-line tag; paid posts do not.", server.home().decode())
             for platform, plan in [(p, tier) for p in chat.PLATFORMS for tier in ("free", "founder", "paid")]:
                 with self.subTest(platform=platform, plan=plan):
-                    server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan,
+                    server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan, platform_icons=False,
                                              webhook=qa_relay.HOOKS["fixture-one"])
                     posts = []
                     def thread(target, args, daemon):
@@ -152,10 +152,12 @@ class PortableApp(unittest.TestCase):
             obj.platform.get.return_value = "twitch"
             obj.runner, obj.win = mock.Mock(), mock.Mock()
             obj.show_tag = mock.Mock(get=lambda: False)
+            obj.platform_icons = mock.Mock(get=lambda: False)
             with mock.patch.object(app, "set_autostart") as auto:
                 obj.save()
                 auto.assert_not_called()
             self.assertFalse(chat.load_config(portable=True).getboolean("chat", "show_tag"))
+            self.assertFalse(chat.load_config(portable=True).getboolean("chat", "platform_icons"))
             obj.test_banner()
             self.assertTrue((alternate / "banner.txt").exists())
             self.assertTrue((alternate / "config.ini").exists())
