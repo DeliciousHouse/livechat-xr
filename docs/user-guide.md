@@ -39,6 +39,8 @@ Next, go live on your chosen platform and have someone else post a comment. Your
 
 **Show LiveChat XR tag** is on by default (`[chat] show_tag = true` in `config.ini`). Each connection shows `LiveChat XR - livechat.deliciouswines.org` through the normal fading banner. TikTok follow asks end with `  - LiveChat XR`; gifts and comments are unchanged. Uncheck it in Settings and Save to disable both banner tags.
 
+**Platform emoji on each message** is on by default (`[chat] platform_icons = true`). Each chat line, in the banner and in Discord, starts with 🎵 for TikTok, 🟣 for Twitch or ▶️ for YouTube. Uncheck it in Settings and Save to turn it off. Hosted relay users have the same checkbox on their manage page.
+
 ### What you set up
 
 The app reads stream chat; the VR layer draws it inside the chosen PC game. Restart the game after changing Games, placement or duration. Keep the tray app running. **Quit** stops new chat updates. To remove the layer, uninstall LiveChat XR through Windows Apps. Only use it with games that permit third-party OpenXR overlays; anti-cheat compatibility is not guaranteed.

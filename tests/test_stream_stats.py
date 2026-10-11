@@ -66,7 +66,7 @@ class StreamStats(unittest.TestCase):
                         def thread(target, args, **kwargs):
                             return mock.Mock(start=lambda: target(*args))
 
-                        qa_relay.server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan,
+                        qa_relay.server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan, platform_icons=False,
                                                          webhook=qa_relay.HOOKS["fixture-one"])
                         with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
                                 mock.patch.object(chat, "post_discord", side_effect=post), \

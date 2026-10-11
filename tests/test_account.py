@@ -42,6 +42,18 @@ class Account(unittest.TestCase):
             self.assertIn(f"/m/{token}", self.posts[-1][1])
             self.assertEqual(json.loads((server.DATA / "registrations.json").read_text())[token], r)
 
+    def test_platform_icons_default_on_and_toggle_from_settings(self):
+        token = self.register()
+        self.assertTrue(server.regs[token]["platform_icons"])
+        self.assertIn('name="platform_icons" value="1" checked', urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
+        form = dict(name="Ann", email="ann@example.com", twitch="someone", icons_form="1")
+        with mock.patch.object(server, "check_webhook", return_value="Discord"):
+            self.assertEqual(self.post(f"/m/{token}/save", **form)[0], 303)  # unchecked box: field absent
+            self.assertFalse(server.regs[token]["platform_icons"])
+            self.assertNotIn('value="1" checked', urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
+            self.assertEqual(self.post(f"/m/{token}/save", platform_icons="1", **form)[0], 303)
+        self.assertTrue(server.regs[token]["platform_icons"])
+
     def test_edit_validation_matches_register_and_leaves_record_unchanged(self):
         token = self.register()
         before = dict(server.regs[token])

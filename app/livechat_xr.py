@@ -133,6 +133,9 @@ class App:
         self.show_tag = tk.BooleanVar(value=self.cfg.getboolean("chat", "show_tag", fallback=True))
         ttk.Checkbutton(f, text="Show LiveChat XR tag", variable=self.show_tag).grid(row=n, column=1, sticky="w", pady=6)
         n += 1
+        self.platform_icons = tk.BooleanVar(value=self.cfg.getboolean("chat", "platform_icons", fallback=True))
+        ttk.Checkbutton(f, text="Platform emoji on each message", variable=self.platform_icons).grid(row=n, column=1, sticky="w", pady=6)
+        n += 1
         self.auto = tk.BooleanVar(value=False if self.portable else autostart_enabled())
         auto = ttk.Checkbutton(f, text="Start with Windows", variable=self.auto)
         auto.grid(row=n, column=1, sticky="w", pady=6)
@@ -159,6 +162,7 @@ class App:
                     return
             self.cfg[sec][key] = val
         self.cfg["chat"]["show_tag"] = str(bool(self.show_tag.get())).lower()
+        self.cfg["chat"]["platform_icons"] = str(bool(self.platform_icons.get())).lower()
         chat.save_config(self.cfg)
         if not self.portable:
             set_autostart(self.auto.get())
