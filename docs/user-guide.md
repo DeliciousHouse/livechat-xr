@@ -88,7 +88,13 @@ If you cannot create a webhook, check that you own the server or have its **Mana
 
 Use the exact TikTok username on your profile, not the nickname shown on screen. You do not have to be live just to sign up. If the server says it cannot find your account, check spelling and LIVE eligibility. If it cannot verify TikTok right now, signup can still succeed with a note; confirm the status later.
 
-On the hosted relay, return to signup with the **same manual Discord webhook**, then enter the corrected channel and connect. This updates the existing registration and preserves its plan/free spot. Creating a new webhook or using one-click Discord again may create a different webhook and a new registration; do not delete a paid registration just to fix its spelling. In the PC app, change Channel in Settings and save.
+On the hosted relay, open your private manage link and use **Edit settings → Save settings**. Change your name, email or stream channels there. Leave the webhook blank to keep it; paste a new Discord webhook if you deleted the old channel/webhook. Both are revalidated. Your private link, creation date, subscription and founder/paid plan stay unchanged; the relay restarts and posts confirmation to the new webhook. Changing your Discord username needs no action. In the PC app, change Channel in Settings and save.
+
+**Lost your link?** Select **Find my relay** on the setup page and continue with Google using the email you saved. Only a verified Google identity can find accounts; if you have more than one, choose its channel list. Without Google recovery, find the original manage-link post in your Discord channel. There is no recovery email sender. Do not sign up with a new webhook to repair a paid account: that creates a separate registration.
+
+Twitch and YouTube retain permanent channel IDs and automatically follow renamed handles, with one Discord confirmation. Twitch needs relay-side Helix credentials; without them, it keeps anonymous IRC and checks the saved room ID. TikTok IDs are saved when its public profile or room info exposes them, but there is no supported ID-to-handle lookup. After three consecutive not-found checks on a previously resolved TikTok/Twitch account, the status says **Handle not found: did you rename?** and Discord gets one manage-link alert per handle change. Edit the handle to recover.
+
+**Channel status** distinguishes waiting/offline, connected with no messages yet, last successful chat delivery, missing channels, platform rate limiting, Discord webhook rejection and channels waiting for upgrade. **Send test message** checks Discord separately. **Something's wrong** saves plan, channel names, normalized error categories, last successful delivery times, relay version and uptime to a bounded server-side support log. No webhook, manage token, email or chat content is included; this is not a chatbot or an instant support response.
 
 ## Pricing and billing
 

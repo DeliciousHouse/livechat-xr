@@ -84,7 +84,8 @@ Environment is read at import/startup. Restart after configuration changes. No s
 | STRIPE_WEBHOOK_SECRET | empty | Signing secret; empty rejects Stripe events |
 | DISCORD_CLIENT_ID | empty | Enables Connect Discord when set |
 | DISCORD_CLIENT_SECRET | empty | Discord OAuth exchange secret |
-| GOOGLE_CLIENT_ID | empty | Enables Google identity prefill/verification |
+| GOOGLE_CLIENT_ID | empty | Enables Google identity prefill/verification and verified-email relay recovery |
+| TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET | empty | Helix app credentials for permanent user ID → current login; missing credentials retain anonymous IRC and one-time missing-handle alerts |
 | GA_ID | empty | Enables GA4 on public home/privacy/manage pages |
 
 First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
@@ -99,6 +100,9 @@ Responses are HTML except simple health/Stripe text responses; there is no gener
 | POST `/register` | URL-encoded name, email, webhook, and `tiktok` and/or `twitch` (the older `platform` + `channel` pair is still accepted); optional `google` credential and `via=discord` or `via=webhook`. 303 to manage on success; 400 validation error; 503 new-registration capacity reached |
 | GET `/discord/callback` | One-use state and code, valid for 900 seconds; exchanges Discord authorization for the selected channel's webhook; 400 on failure |
 | GET `/m/{token}` | Private manage page; 404 absent/deleted registration |
+| POST `/m/{token}/save` | Same validation as registration, blank webhook retains current credential; replaces settings while preserving private token, plan, founder reservation, subscription and creation date; restarts relay and confirms to the new webhook |
+| POST `/m/{token}/report` | Writes sanitized channel/status diagnostics to bounded `support.jsonl`; one report per account per minute; never credentials, tokens, email or chat |
+| GET/POST `/recover` | Google sign-in page / verifies Google credential and redirects to a matching account or offers matching channel lists; unverified visitors never learn whether an email exists |
 | POST `/m/{token}/test` | Posts a test for any plan; 404 inactive link. “Test sent” is not a delivery receipt |
 | POST `/m/{token}/delete` | Deletes registration and in-memory stats, stops runner. Does not cancel Stripe billing |
 | GET `/privacy` | Stored data, analytics and deletion policy |
@@ -115,6 +119,8 @@ TikTok signup checks profile hydration even when offline. A missing/unavailable 
 On first load, existing free/missing-plan records ordered by `created` (token breaks ties) fill founder slots. Existing pending records become free, not founders. Before the first migration write, `registrations.json` is copied byte-for-byte to `registrations.pre-founder.json`, never overwritten on retry. `founders.json` stores lifetime slot reservations and marks migration complete, so restarts never promote newer free users and deleting a founder does not reopen a slot. Back up and restore it alongside registrations; it contains private registration tokens. Reservation is saved before a new founder registration, so an interrupted write can consume a slot but never award more than the limit. Free and founder chat batches retain discovery tags; paid batches have none.
 
 Signatures use HMAC-SHA256 with a 300-second timestamp tolerance. This is not a durable event-ID replay ledger. Persistent files are `registrations.json`, `stats.json` (saved on changes at 30-second intervals), rotating `relay.log`/`.1`, and backup timestamp files `last_backup`, `last_offsite`. Tokens, webhooks and subscription IDs in registration data are private. Admin shows counts, status, failures, recent logs and backup age, refreshing in 30 seconds; ages beyond 36 hours warn.
+
+Registrations also hold an `identities` entry per resolved platform (permanent ID, current handle, optional TikTok `sec_uid`, and the handle already alerted). Startup enriches saved registrations in background threads; failed lookups are logged by exception type and never prevent startup or relay connections. Twitch IRC `ROOMSTATE` supplies an anonymous room ID as a fallback; a reclaimed login with a different room ID is never relayed. YouTube connects via `/channel/UC.../live`. TikTok remains handle-based. Three consecutive not-found checks on a known ID send one update-link alert per handle change. `support.jsonl` rotates at approximately 1 MB into `.1`; it contains normalized error categories, last success timestamps, plan, channel names, a source-content version hash and uptime. There is no configured mail sender, ops intake or Telegram alert path; support is local-log-only until one exists.
 
 ## Command interface
 

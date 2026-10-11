@@ -60,6 +60,9 @@ founders: set[str] = set()     # lifetime slot reservations; deleting a registra
 status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; saved to stats.json every 30 s
+reports: dict[str, float] = {}  # rate limit support reports; no private IDs in the support log
+RELAY_VERSION = hashlib.sha256(Path(__file__).read_bytes() + Path(chat.__file__).read_bytes()).hexdigest()[:12]
+STARTED = time.time()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
 
@@ -237,6 +240,142 @@ def check_channel(platform: str, channel: str) -> bool | None:
     return None
 
 
+def remember_identity(token: str, platform: str, found: dict, notify: bool = True, *, expected=None) -> None:
+    handle = normalise_channel(platform, found.get("handle", ""))
+    if not CHANNEL[platform].fullmatch(handle) or not found.get("id"):
+        return
+    with lock:
+        r = regs.get(token)
+        if not r or platform not in channels(r) or (expected is not None and r is not expected):
+            return
+        old = channels(r)[platform]
+        previous = r.setdefault("identities", {}).get(platform, {})
+        r["identities"][platform] = {**previous, **found}
+        r["channels"] = {**channels(r), platform: handle}
+        if r["platform"] == platform:
+            r["channel"] = handle
+        save()
+    if notify and old != handle:
+        chat.post_discord(r["webhook"], f"Noticed you renamed to {handle}, still connected.")
+
+
+def resolve_saved_identities(token: str) -> None:
+    r = regs.get(token)
+    if not r:
+        return
+    for p, c in list(channels(r).items()):
+        try:
+            found = chat.resolve_identity(p, c, r.get("identities", {}).get(p))
+            if found and regs.get(token) is r:
+                remember_identity(token, p, found, expected=r)
+        except Exception as e:
+            log.warning("%s identity lookup: %s", p, type(e).__name__)
+
+
+def status_kind(s: str) -> str:
+    s = s.lower()
+    if "can't find" in s or "notfound" in s or "not found" in s:
+        return "not_found"
+    if "429" in s or "ratelimit" in s or "rate limit" in s or "toomanyrequests" in s:
+        return "rate_limit"
+    if "offline" in s or "waiting" in s:
+        return "waiting"
+    if "connected to" in s:
+        return "connected"
+    if "retry" in s or "reconnect" in s or "error" in s:
+        return "relay_error"
+    return "starting"
+
+
+def channel_state(token: str, p: str) -> dict:
+    return stats.setdefault(token, {}).setdefault("channels", {}).setdefault(p, {})
+
+
+def diagnostic(token: str) -> dict:
+    r = regs[token]
+    rows = []
+    for p, c in channels(r).items():
+        st = channel_state(token, p)
+        raw = st.get("status") or next((s for s in status.get(token, "").split(" · ") if s.lower().startswith(p + ":")), "")
+        error = stats.get(token, {}).get("discord_error", 0)
+        kind = status_kind(raw)
+        rows.append({"platform": p, "name": c if CHANNEL[p].fullmatch(c) else "invalid",
+                     "status": kind if p in live_channels(r) else "waiting_upgrade",
+                     "last_error": "discord_rejected" if error in (401, 404) else "discord_error" if error else
+                                   kind if kind in ("not_found", "rate_limit", "relay_error") else "",
+                     "last_success": st.get("last_post", 0)})
+    return {"plan": plan(r) if plan(r) in ("founder", "free", "paid") else "free", "channels": rows,
+            "version": RELAY_VERSION, "uptime_seconds": int(time.time() - STARTED), "reported_at": time.time()}
+
+
+def support_report(token: str) -> bool:
+    with lock:
+        if time.time() - reports.get(token, 0) < 60:
+            return False
+        DATA.mkdir(parents=True, exist_ok=True)
+        # No intake or Telegram ops sender is configured. Keep bounded local diagnostics only.
+        path = DATA / "support.jsonl"
+        if path.exists() and path.stat().st_size > 1_000_000:
+            os.replace(path, DATA / "support.jsonl.1")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(diagnostic(token)) + "\n")
+        reports[token] = time.time()
+    return True
+
+
+def source_status(token: str, p: str, s: str) -> None:
+    r = regs.get(token)
+    if not r:
+        return
+    st = channel_state(token, p)
+    kind = status_kind(s)
+    st["status"] = s
+    st["error"] = kind if kind in ("not_found", "rate_limit", "relay_error") else ""
+    st["missing"] = st.get("missing", 0) + 1 if kind == "not_found" else 0
+    identity = r.get("identities", {}).get(p, {})
+    if kind == "not_found" and identity.get("id") and st["missing"] >= 3:
+        handle = channels(r)[p]
+        if identity.get("alerted_handle") != handle:
+            with lock:
+                identity["alerted_handle"] = handle
+                save()
+            chat.post_discord(r["webhook"], f"Handle not found: did you rename? Update {LABEL[p]} here: <{manage_url(token)}>")
+    if kind == "relay_error":
+        try:
+            support_report(token)
+        except OSError:
+            log.warning("support log unavailable")
+
+
+def channel_status(token: str, p: str) -> str:
+    r = regs[token]
+    if p not in live_channels(r):
+        return "Waiting for upgrade"
+    st = channel_state(token, p)
+    discord_error = stats.get(token, {}).get("discord_error", 0)
+    if discord_error in (401, 404):
+        return "Discord rejected the webhook. Paste a new one below."
+    if discord_error:
+        return "Discord couldn't accept the last message; retrying on the next batch."
+    raw = st.get("status") or next((s for s in status.get(token, "").split(" · ") if s.lower().startswith(p.lower() + ":")), "")
+    kind = status_kind(raw)
+    if kind == "not_found":
+        if r.get("identities", {}).get(p, {}).get("alerted_handle") == channels(r)[p]:
+            return "Handle not found: did you rename?"
+        return "That channel name wasn't found. Check the spelling below."
+    if kind == "rate_limit":
+        return "Platform is rate-limiting us; retrying automatically"
+    if kind == "relay_error":
+        return "Relay problem on our side; we've been notified" if reports.get(token) else "Relay problem on our side; retrying automatically"
+    if kind == "waiting":
+        return f"Waiting: you're not live on {LABEL[p]} right now"
+    if kind == "connected":
+        if st.get("last_post"):
+            return f"Live: last message sent to Discord {max(0, int((time.time() - st['last_post']) // 60))} min ago"
+        return "Connected: waiting for the first chat message."
+    return "Starting: checking your channel automatically."
+
+
 async def run(token: str, delay: float = 0) -> None:
     await asyncio.sleep(delay)  # stagger startup: TikTok's sign server rate-limits connects per IP
     r = regs[token]
@@ -246,22 +385,31 @@ async def run(token: str, delay: float = 0) -> None:
         nonlocal tag_pending
         tag_pending = True
 
-    def post(text: str) -> None:
-        ok = chat.post_discord(r["webhook"], text) is not False
+    def post(text: str, platforms=()) -> None:
+        errors = []
+        ok = chat.post_discord(r["webhook"], text, on_error=errors.append) is not False
+        if regs.get(token) is not r:
+            return
         st = stats.setdefault(token, {"posts": 0, "fails": 0, "last_post": 0, "last_error": ""})
-        st["posts" if ok else "fails"] += 1
+        key = "posts" if ok else "fails"
+        st[key] = st.get(key, 0) + 1
         if ok:
             st["last_post"] = time.time()
+            st["discord_error"] = 0
+            st["last_error"] = ""
+            for p in platforms:
+                channel_state(token, p)["last_post"] = st["last_post"]
         else:
+            st["discord_error"] = errors[0] if errors and errors[0] else -1
             st["last_error"] = time.strftime("%m-%d %H:%M") + " Discord post failed"
 
-    def on_batch(text: str) -> None:
+    def on_batch(text: str, platforms=()) -> None:
         nonlocal tag_pending
         if tag_pending and plan(r) in ("free", "founder"):
             tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
             text = text[:2000 - len(tag)] + tag
         tag_pending = False
-        threading.Thread(target=post, args=(text,), daemon=True).start()
+        threading.Thread(target=post, args=(text, platforms), daemon=True).start()
 
     def on_status(s: str) -> None:
         if status.get(token) != s:
@@ -288,12 +436,17 @@ async def run(token: str, delay: float = 0) -> None:
     while True:
         try:
             await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=live_channels(r),
-                             on_connect=on_connect, on_session=on_session)
+                             on_connect=on_connect, on_session=on_session, identities=r.get("identities", {}),
+                             on_identity=lambda p, found: remember_identity(token, p, found, expected=r),
+                             on_source_status=lambda p, s: source_status(token, p, s) if regs.get(token) is r else None,
+                             on_batch_sources=on_batch)
         except asyncio.CancelledError:
             raise
         except Exception as e:
             on_status(f"error, retrying ({type(e).__name__})")
-            log.warning("%s: %r", channel_label(r), e)
+            for p in live_channels(r):
+                source_status(token, p, f"{LABEL[p]}: retrying ({type(e).__name__})")
+            log.warning("%s: %s", channel_label(r), type(e).__name__)
             await asyncio.sleep(60)
 
 
@@ -302,6 +455,8 @@ def start(token: str, delay: float = 0) -> None:
         if t := tasks.pop(token, None):
             t.cancel()
         status[token] = "starting…"
+        for p in live_channels(regs[token]):
+            channel_state(token, p)["status"] = "starting…"
         tasks[token] = loop.create_task(run(token, delay))
     loop.call_soon_threadsafe(go)
 
@@ -334,6 +489,12 @@ small,.hint{font-size:13px;color:var(--label)}
 code{font-size:.9em}
 .box{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:16px 0;text-align:left}
 .box.err{background:var(--error);border-color:#7a2a38}
+.channel-row{padding:12px 0}.channel-row+.channel-row{border-top:1px solid var(--line)}
+.channel-row .hint{color:var(--muted);margin-top:4px}
+.account input::placeholder{color:var(--muted)}
+.account label,.account .hint,.support .hint{color:var(--muted)}
+button.alt.danger{background:var(--error);border:1px solid #7a2a38;min-height:44px}
+.actions button{min-height:44px}
 .hero{text-align:center;padding-top:10px}
 .hero h1{font-size:52px;line-height:52px}
 .hero h1 em{font-style:normal;color:var(--accent)}
@@ -433,6 +594,7 @@ Founders and paid plans run all saved channels in the same Discord channel.</div
 <section class="step later" aria-labelledby="s3"><div class="n" aria-hidden="true">3</div><div><h2 id="s3">On your Quest</h2>
 <p data-pretext>Install Discord on your Quest if you have not already, open the channel, and set notifications to <b>All Messages</b>.</p></div></section>
 </form>
+<p style="text-align:center"><a href="/recover">Find my relay</a> — lost your private link?</p>
 <footer>Your name and email are only used to know who is using it.{ga_note} Your webhook URL is only used to post your chat.
 Mentions are disabled, so chat can't ping anyone.<br><a href="https://github.com/DeliciousHouse/livechat-xr">Open source on GitHub</a> ·
 <a href="/privacy">Privacy</a></footer>"""
@@ -478,14 +640,25 @@ posted in your Discord channel). That removes your registration right away. Back
 Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
 <p><a href="/">Back</a></p>"""
 
-MANAGE = """<h1>Your chat relay</h1>{msg}
-<div class="box">{channels}<br><b>Discord:</b> webhook “{dname}”<br><b>Status:</b> {status}</div>{billing}
+MANAGE = """<h1>Your relay account</h1>{msg}
+<section class="box" aria-labelledby="relay-status"><h2 id="relay-status">Channel status</h2>{channels}
+<div class="channel-row"><b>Discord:</b> webhook “{dname}”
+<div class="hint">Use Send test message to check delivery.</div></div></section>{billing}
 <p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
 whenever you go live.</p>
-<div class="actions"><form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form>
+{settings}
+<section class="support"><h2>Need help?</h2><p class="hint">Send a diagnostic with channel names, status and relay version only.
+No email, webhook, private link or chat messages are included.</p>
+<div class="actions"><form class="inline" method="post" action="/m/{token}/test"><button class="alt">Send test message</button></form>
+<form class="inline" method="post" action="/m/{token}/report"><button class="alt">Something's wrong</button></form></div></section>
+<div class="actions">
 <form class="inline" method="post" action="/m/{token}/delete" onsubmit="return confirm('Stop posting chat to Discord?')">
-<button class="alt">Stop and delete</button></form></div>
+<button class="alt danger">Stop and delete</button></form></div>
+<p class="hint">Deleting your relay does not cancel a paid subscription. Use Manage billing first.</p>
 <p><a href="/">Set up another channel</a></p>"""
+
+# Existing Dora controllers parse this hidden legacy status contract, not user-facing copy.
+PROBE_STATUS = '<div hidden aria-hidden="true"><b>Status:</b> {status}</div>'
 
 
 WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input type="url" id="webhook" name="webhook" '
@@ -529,7 +702,7 @@ def google_identity(credential: str) -> tuple[str, str]:
     url = "https://oauth2.googleapis.com/tokeninfo?" + urllib.parse.urlencode({"id_token": credential})
     with urllib.request.urlopen(url, timeout=10) as r:
         t = json.load(r)
-    if (t.get("aud") != GOOGLE_ID or t.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
+    if (not GOOGLE_ID or t.get("aud") != GOOGLE_ID or t.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
             or t.get("email_verified") not in ("true", True) or int(t.get("exp", 0)) < time.time()):
         raise ValueError("Google token rejected")
     return (t.get("name") or t["email"])[:60], t["email"].lower()
@@ -563,6 +736,35 @@ def note(text: str, err: bool = False) -> str:
 
 def manage_url(token: str) -> str:
     return f"{PUBLIC_URL}/m/{token}" if PUBLIC_URL else f"/m/{token}"
+
+
+def settings_form(token: str, form: dict) -> str:
+    e = html.escape
+    inputs = "".join(f'<label for="{p}">{LABEL[p]} channel</label><input type="text" id="{p}" name="{p}" '
+                     f'value="{e(form.get(p, ""))}" maxlength="200" autocapitalize="off" spellcheck="false">' for p in LABEL)
+    return (f'<form class="card account" method="post" action="/m/{token}/save"><h2>Edit settings</h2>'
+            '<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" '
+            f'value="{e(form.get("name", ""))}" required maxlength="60" autocomplete="name"></div>'
+            '<div><label for="email">Email</label><input type="email" id="email" name="email" '
+            f'value="{e(form.get("email", ""))}" required maxlength="200" autocomplete="email"></div></div>'
+            + inputs + WEBHOOK_FIELD.format(webhook="", req="").replace("https://discord.com/api/webhooks/…", "Paste a new webhook URL")
+            + '<p class="hint">Leave the webhook blank to keep the current one. Paste a new one to change Discord channels. '
+            'Changing your Discord username needs no action.</p><button class="cta">Save settings</button></form>')
+
+
+def recovery_page(msg: str = "") -> bytes:
+    body = '<h1>Find my relay</h1>' + msg
+    if GOOGLE_ID:
+        body += ('<p>Continue with Google using the email saved on your relay account.</p>'
+                 '<form method="post" action="/recover" id="recovery"><input type="hidden" name="google" id="recover-credential">'
+                 '<script src="https://accounts.google.com/gsi/client" async></script>'
+                 f'<div id="g_id_onload" data-client_id="{html.escape(GOOGLE_ID)}" data-callback="recover" data-auto_prompt="false"></div>'
+                 '<div class="gsi"><div class="g_id_signin" data-type="standard" data-theme="filled_black" data-text="continue_with"></div></div>'
+                 '<script>function recover(r){document.getElementById("recover-credential").value=r.credential;'
+                 'document.getElementById("recovery").submit()}</script></form>')
+    else:
+        body += '<p>Google recovery is not available here. Look for your private manage link in the Discord channel you connected.</p>'
+    return page(body + '<p><a href="/">Back to setup</a></p>')
 
 
 def ago(ts: float) -> str:
@@ -626,19 +828,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
+        elif self.path.startswith(("/m/", "/recover")):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Referrer-Policy", "no-referrer")  # manage links carry the token
         self.end_headers()
         self.wfile.write(body)
 
-    def manage(self, token: str, msg: str = "", new: str = "") -> None:
+    def manage(self, token: str, msg: str = "", new: str = "", *, code: int = 200, form=None) -> None:
         r = regs.get(token)
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
-        billing, st = "", status.get(token, "starting…")
-        if "TikTok: can't find" in st:
-            msg += note("To correct your channel, use Set up another channel below with the same Discord webhook. "
-                        "This updates your existing registration; no need to delete it.")
+        billing = ""
         if plan(r) == "free":
             q = f"?client_reference_id={token}&prefilled_email={quote(r['email'])}"
             links = " · ".join(f'<a href="{html.escape(url + q)}">{label}</a>'
@@ -650,19 +851,21 @@ class Handler(BaseHTTPRequestHandler):
             billing = '<div class="box"><b>Founder: all your channels free forever.</b> No payment needed.</div>'
         elif plan(r) == "paid" and BILLING_URL:
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
-        self.send(200, page(MANAGE.format(
+        self.send(code, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
-            channels="<br>".join(f"<b>{LABEL[p]}:</b> {html.escape(c)}"
-                                 + (" — waiting for upgrade" if p not in live_channels(r) else "")
-                                 for p, c in channels(r).items()),
+            channels="".join(f'<div class="channel-row"><b>{LABEL[p]}:</b> {html.escape(c)}'
+                             f'<div class="hint">{html.escape(channel_status(token, p))}</div></div>' for p, c in channels(r).items()),
             dname=html.escape(r["discord_channel"]),
-            status=html.escape(st), billing=billing),
-            ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else ""))
+            settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing),
+            ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
+            .replace(b'</main>', (PROBE_STATUS.format(status=html.escape(status.get(token, "starting…"))) + '</main>').encode()))
 
     def do_GET(self):
         path = self.path.split("?")[0]
         if path == "/":
             return self.send(200, home())
+        if path == "/recover":
+            return self.send(200, recovery_page())
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
             return self.send(200, page(admin_body()))
         if path == "/discord/callback":
@@ -690,7 +893,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
-            return self.manage(m[1], new=parse_qs(self.path.partition("?")[2]).get("new", [""])[0])
+            q = parse_qs(self.path.partition("?")[2])
+            return self.manage(m[1], msg=note("Settings saved. Your plan and private link are unchanged.") if q.get("saved") == ["1"] else "",
+                               new=q.get("new", [""])[0])
         self.send(404, page(note("Not found.", True)))
 
     def do_POST(self):
@@ -703,14 +908,28 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/register":
             return self.register(form)
-        m = re.fullmatch(r"/m/([\w-]{20,64})/(test|delete)", path)
+        if path == "/recover":
+            return self.recover(form)
+        m = re.fullmatch(r"/m/([\w-]{20,64})/(test|delete|save|report)", path)
         if not m or m[1] not in regs:
             return self.send(404, page(note("That link isn't active.", True)))
         token, action = m[1], m[2]
+        if action == "save":
+            return self.register(form, token)
+        if action == "report":
+            try:
+                saved = support_report(token)
+            except OSError:
+                return self.manage(token, note("Couldn't save the diagnostic. Please try again later.", True), code=503)
+            return self.manage(token, note("Diagnostic saved for support. No private credentials or chat were included." if saved
+                                           else "Your recent diagnostic is already saved. Please wait a minute before sending another."))
         if action == "test":
             r = regs[token]
-            chat.post_discord(r["webhook"], f"LiveChat XR: test message ✔ Chat from {r['channel']} will show up here.")
-            return self.manage(token, note("Test sent. Check your Discord channel (and your Quest)."))
+            errors = []
+            ok = chat.post_discord(r["webhook"], f"LiveChat XR: test message ✔ Chat from {r['channel']} will show up here.", on_error=errors.append)
+            stats.setdefault(token, {})["discord_error"] = 0 if ok is not False else (errors[0] if errors else -1)
+            return self.manage(token, note("Test sent. Check your Discord channel (and your Quest)." if ok is not False
+                                           else "Discord didn't accept the test. Check the webhook below.", ok is False))
         with lock:
             r = regs.pop(token, None)
             stats.pop(token, None)
@@ -751,11 +970,30 @@ class Handler(BaseHTTPRequestHandler):
                                                           f"Renew here: <{manage_url(token)}>")
         self.send(200, b"ok")
 
-    def register(self, form: dict) -> None:
+    def recover(self, form: dict) -> None:
+        try:
+            if not GOOGLE_ID or not form.get("google"):
+                raise ValueError
+            _, email = google_identity(form["google"])
+        except Exception:
+            return self.send(400, recovery_page(note("Please continue with Google to verify your email.", True)))
+        with lock:
+            matches = [(t, channel_label(r)) for t, r in regs.items() if r.get("email", "").lower() == email.lower()]
+        if len(matches) == 1:
+            return self.send(303, b"", location=f"/m/{matches[0][0]}")
+        if matches:
+            return self.send(200, page('<h1>Your relays</h1>' + "".join(f'<p><a href="/m/{t}">{html.escape(label)}</a></p>' for t, label in matches)))
+        self.send(200, recovery_page(note("No relay matches your verified Google email. Try another Google account or set up a relay.")))
+
+    def register(self, form: dict, edit_token: str = "") -> None:
+        def fail(message, code=400):
+            if edit_token:
+                return self.manage(edit_token, note(message, True), code=code, form=form)
+            return self.send(code, home(note(message, True), form))
         wanted = {p: normalise_channel(p, form[p]) for p in LABEL if form.get(p, "").strip()}
         if not wanted and form.get("platform") in LABEL and form.get("channel", "").strip():  # older single-platform form
             wanted[form["platform"]] = normalise_channel(form["platform"], form["channel"])
-        webhook = form.get("webhook", "")
+        webhook = form.get("webhook", "") or (regs[edit_token]["webhook"] if edit_token else "")
         err = None
         if form.get("google") and GOOGLE_ID:
             try:
@@ -774,7 +1012,7 @@ class Handler(BaseHTTPRequestHandler):
         elif any(not CHANNEL[p].match(c) for p, c in wanted.items()):
             err = "That channel name doesn't look right."
         if err:
-            return self.send(400, home(note(err, True), form))
+            return fail(err)
         channel_note = ""
         for p, c in wanted.items():
             try:
@@ -783,10 +1021,10 @@ class Handler(BaseHTTPRequestHandler):
                 log.warning("channel check: %s", type(e).__name__)  # no credentials or remote response in logs
                 exists = None
             if exists is False:
-                return self.send(400, home(note(f"We can't find that {LABEL[p]} account. Check the spelling, without the @", True), form))
+                return fail(f"We can't find that {LABEL[p]} account. Check the spelling, without the @")
             if exists is None:
                 channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
-        if form.get("via") == "discord" and DISCORD_ID:
+        if not edit_token and form.get("via") == "discord" and DISCORD_ID:
             state = secrets.token_urlsafe(24)
             with lock:
                 oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "signin")} | wanted)
@@ -796,15 +1034,18 @@ class Handler(BaseHTTPRequestHandler):
         elif not WEBHOOK.match(webhook):
             err = "That isn't a Discord webhook URL. It should start with https://discord.com/api/webhooks/"
         if err:
-            return self.send(400, home(note(err, True), form))
+            return fail(err)
         try:
             dname = check_webhook(webhook)
         except Exception:
-            return self.send(400, home(note("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.", True), form))
+            return fail("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.")
         with lock:
-            token = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
+            owner = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
+            if edit_token and owner and owner != edit_token:
+                return fail("That webhook is already connected to another relay. Use a different webhook.")
+            token = edit_token or owner
             if token is None and len(regs) >= MAX_REGS:
-                return self.send(503, home(note("This server is full right now. Try again later.", True)))
+                return fail("This server is full right now. Try again later.", 503)
             old = regs.get(token, {}) if token else {}
             token = token or secrets.token_urlsafe(24)
             p = plan(old) if old else ("founder" if free_used() < FREE_SLOTS else "free")
@@ -813,15 +1054,20 @@ class Handler(BaseHTTPRequestHandler):
                 write_json("founders.json", sorted(founders))
             platform, channel = next(iter(wanted.items()))  # primary pair kept for older readers (admin exports, QA tools)
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "channels": wanted, "webhook": webhook,
-                           "discord_channel": dname, "created": old.get("created") or int(time.time()), "plan": p,
-                           "signin": form.get("signin") or "email", "channel_note": channel_note}
+                           "discord_channel": dname, "created": old.get("created", int(time.time())), "plan": p,
+                           "signin": form.get("signin") or old.get("signin", "email"), "channel_note": channel_note}
+            regs[token]["identities"] = {p: ident for p, ident in old.get("identities", {}).items()
+                                          if p in wanted and channels(old).get(p) == wanted[p]}
+            if edit_token:
+                stats.pop(token, None)
             save()
+        resolve_saved_identities(token)
         start(token)
         active = " · ".join(f"{LABEL[p]} {c}" for p, c in live_channels(regs[token]).items())
         waiting = " Extra channels are saved, waiting for upgrade." if len(wanted) > len(live_channels(regs[token])) else ""
         chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {active} will show up here while you're live.{waiting}\n"
                                    f"Manage or stop it: <{manage_url(token)}>")
-        self.send(303, b"", location=f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
+        self.send(303, b"", location=f"/m/{token}?saved=1" if edit_token else f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
         log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
@@ -846,6 +1092,8 @@ def main() -> None:
     load_registrations()
     for i, token in enumerate(regs):
         start(token, delay=i * 3)
+        # Enrich even upgrade-waiting channels, without delaying HTTP health checks or relays.
+        threading.Thread(target=resolve_saved_identities, args=(token,), daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log.info("listening on :%d with %d registrations", PORT, len(regs))

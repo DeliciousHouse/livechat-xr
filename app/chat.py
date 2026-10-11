@@ -14,6 +14,7 @@ import ssl
 import threading
 import time
 import urllib.request
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -74,7 +75,7 @@ def write_banner(text: str) -> None:
     os.replace(tmp, DIR / "banner.txt")  # atomic: the layer never reads a half-written file
 
 
-def post_discord(webhook: str, text: str) -> bool:
+def post_discord(webhook: str, text: str, *, on_error=None) -> bool:
     """Post one batch to a Discord channel webhook. Discord's own app shows it as a notification
     (on Quest that includes pop-ups during games), which is the standalone/companion display path."""
     body = json.dumps({
@@ -88,7 +89,10 @@ def post_discord(webhook: str, text: str) -> bool:
         urllib.request.urlopen(req, timeout=10).close()
         return True
     except Exception as e:  # 429 = Discord rate limit (30/min/channel); drop rather than pile up
-        log.warning("discord post failed: %s", e)
+        code = getattr(e, "code", 0)
+        log.warning("discord post failed: %s", code or type(e).__name__)
+        if on_error:
+            on_error(code)
         return False
 
 
@@ -122,23 +126,114 @@ def twitch_line(line: str, channel: str) -> str | None:
         return None  # individual subs of a mass gift: the submysterygift line already covers them
     return GIFT + (tags.get("system-msg") or f"{name}: {kind}") + (f" — {msg}" if msg else "")
 
-async def twitch(channel: str, emit, status, tally=None) -> None:
+_twitch_token = ("", 0.0)
+_twitch_lock = threading.Lock()
+
+
+def _twitch_access() -> str:
+    global _twitch_token
+    with _twitch_lock:
+        if _twitch_token[1] <= time.time():
+            body = urllib.parse.urlencode({"client_id": os.environ["TWITCH_CLIENT_ID"],
+                                           "client_secret": os.environ["TWITCH_CLIENT_SECRET"],
+                                           "grant_type": "client_credentials"}).encode()
+            with urllib.request.urlopen("https://id.twitch.tv/oauth2/token", body, timeout=10) as r:
+                data = json.load(r)
+            _twitch_token = (data["access_token"], time.time() + int(data["expires_in"]) - 60)
+        return _twitch_token[0]
+
+
+def resolve_identity(platform: str, handle: str, identity: dict | None = None) -> dict | None:
+    """Best-effort permanent ID + current handle. Callers retain a known ID on lookup failures."""
+    identity = identity or {}
+    if platform == "twitch":
+        if not (os.environ.get("TWITCH_CLIENT_ID") and os.environ.get("TWITCH_CLIENT_SECRET")):
+            return None
+        q = {"id": identity["id"]} if identity.get("id") else {"login": handle.lstrip("@#")}
+        req = urllib.request.Request("https://api.twitch.tv/helix/users?" + urllib.parse.urlencode(q),
+                                     headers={"Client-ID": os.environ["TWITCH_CLIENT_ID"],
+                                              "Authorization": "Bearer " + _twitch_access()})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            users = json.load(r).get("data", [])
+        return {"id": users[0]["id"], "handle": users[0]["login"]} if users else None
+    if platform == "youtube":
+        path = "channel/" + identity["id"] if identity.get("id") else handle
+        text = _yt_get("https://www.youtube.com/" + path)
+        m = re.search(r'"channelMetadataRenderer"\s*:\s*', text)
+        if m:
+            meta, _ = json.JSONDecoder().raw_decode(text[m.end():])
+            cid = meta.get("externalId", "")
+            current = urllib.parse.urlparse(meta.get("vanityChannelUrl", "")).path.strip("/")
+            if re.fullmatch(r"UC[\w-]{22}", cid):
+                return {"id": cid, "handle": current if current.startswith("@") else handle}
+    if platform == "tiktok":
+        text = _yt_get("https://www.tiktok.com/" + handle)
+        m = re.search(r'<script\b[^>]*\bid="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', text, re.S)
+        if m:
+            owner = json.loads(m[1]).get("__DEFAULT_SCOPE__", {}).get("webapp.user-detail", {}).get("userInfo", {}).get("user", {})
+            if owner.get("id") and owner.get("uniqueId", "").lower() == handle.lstrip("@").lower():
+                return {"id": str(owner["id"]), "sec_uid": owner.get("secUid", ""), "handle": "@" + owner["uniqueId"]}
+    return None
+
+
+async def refresh_identity(platform, handle, identity, on_identity):
+    try:
+        found = await asyncio.to_thread(resolve_identity, platform, handle, identity)
+        if found:
+            identity.update(found)
+            on_identity(found)
+            return found["handle"]
+    except Exception as e:
+        log.warning("%s identity lookup: %s", platform, type(e).__name__)
+    return handle
+
+
+async def twitch(channel: str, emit, status, tally=None, *, identity=None, on_identity=None) -> None:
     channel = channel.lower().lstrip("#")
+    identity = identity if identity is not None else {}
     while True:
+        w = None
+        joined = not on_identity
         try:
+            if on_identity:
+                channel = await refresh_identity("twitch", channel, identity, on_identity)
             r, w = await asyncio.open_connection("irc.chat.twitch.tv", 6697, ssl=ssl.create_default_context())
-            w.write(f"CAP REQ :twitch.tv/tags\r\nNICK justinfan{random.randint(10000, 99999)}\r\nJOIN #{channel}\r\n".encode())
+            w.write(f"CAP REQ :twitch.tv/tags twitch.tv/commands\r\nNICK justinfan{random.randint(10000, 99999)}\r\nJOIN #{channel}\r\n".encode())
             await w.drain()
-            status(f"Twitch: connected to #{channel}")
+            if joined:
+                status(f"Twitch: connected to #{channel}")
             while True:
-                raw = await asyncio.wait_for(r.readline(), 360)  # Twitch PINGs every ~5 min
+                try:
+                    raw = await asyncio.wait_for(r.readline(), 360 if joined else 20)  # Twitch PINGs every ~5 min
+                except TimeoutError:
+                    if joined:
+                        raise
+                    status(f"Twitch: can't find {channel}")
+                    await asyncio.sleep(60)
+                    break
                 if not raw:
                     raise ConnectionError("connection closed")
                 line = raw.decode("utf-8", "replace").rstrip("\r\n")
-                if line.startswith("PING"):
+                if on_identity and " ROOMSTATE " in line:
+                    room_id = _tags(line.split(" ", 1)[0].lstrip("@")).get("room-id")
+                    if room_id:
+                        if identity.get("id") and identity["id"] != room_id:
+                            status(f"Twitch: can't find {channel}")
+                            await asyncio.sleep(60)
+                            break  # old login now belongs to somebody else; never relay their chat
+                        identity.update(id=room_id, handle=channel)
+                        on_identity(dict(identity))
+                    joined = True
+                    status(f"Twitch: connected to #{channel}")
+                elif line.startswith("PING"):
                     w.write(f"PONG{line[4:]}\r\n".encode())
                     await w.drain()
-                elif out := twitch_line(line, channel):
+                    if on_identity:
+                        current = await refresh_identity("twitch", channel, identity, on_identity)
+                        if current != channel:
+                            channel = current
+                            break  # reconnect IRC using the login resolved from the permanent ID
+                elif joined and (out := twitch_line(line, channel)):
                     parsed = _LINE.match(line)
                     if tally and parsed:
                         if parsed["cmd"] == "USERNOTICE" or _tags(parsed["tags"] or "").get("bits"):
@@ -149,9 +244,13 @@ async def twitch(channel: str, emit, status, tally=None) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            status(f"Twitch: reconnecting ({e.__class__.__name__})")
-            log.warning("twitch: %r", e)
+            status(f"Twitch: reconnecting ({getattr(e, 'code', 0) or e.__class__.__name__})")
+            log.warning("twitch: %s", type(e).__name__)
             await asyncio.sleep(10)
+        finally:
+            if w:
+                w.close()
+                await w.wait_closed()
 
 
 # ---------------------------------------------------------------- TikTok (unofficial; TikTokLive library)
@@ -257,7 +356,7 @@ class Session:
 
 
 async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None,
-                 tally: Tally | None = None, webhook: str = "") -> None:
+                 tally: Tally | None = None, webhook: str = "", *, identity=None, on_identity=None) -> None:
     """follow_ask=None: plain chat (hosted relay). A string turns on a Session per connection: the follow ask
     (empty string = no ask) and a sessions.jsonl row when the connection ends."""
     from TikTokLive import TikTokLiveClient
@@ -265,6 +364,7 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
     from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, GiftEvent, RoomUserSeqEvent
 
     user = user.lstrip("@")
+    identity = identity if identity is not None else {}
     missing = 0
     if sign_api_key:
         os.environ["SIGN_API_KEY"] = sign_api_key  # read by TikTokLive's signer
@@ -276,6 +376,20 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         async def _(e: ConnectEvent):
             nonlocal missing, session
             missing = 0
+            if on_identity:
+                room = getattr(client, "room_info", None)
+                if not room:
+                    try:
+                        room = await client.web.fetch_room_info()
+                    except Exception as error:
+                        log.warning("tiktok room identity lookup: %s", type(error).__name__)
+                owner = room.get("owner", {}) if isinstance(room, dict) else {}
+                if owner.get("id"):
+                    found = {"id": str(owner["id"]), "sec_uid": owner.get("sec_uid", ""), "handle": "@" + user}
+                    identity.update(found)
+                    on_identity(found)
+                else:
+                    await refresh_identity("tiktok", "@" + user, identity, on_identity)
             if follow_ask is not None:
                 session = Session(follow_ask)
             status(f"TikTok: connected to @{user}")
@@ -332,9 +446,9 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
                        f"retrying in {'30 minutes' if retry == 1800 else '1 minute'}.")
             offline = "offline" in type(e).__name__.lower()
             if not missing:
-                status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({type(e).__name__})")
+                status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({getattr(e, 'code', 0) or type(e).__name__})")
             if not offline:
-                log.warning("tiktok: %r", e)
+                log.warning("tiktok: %s", type(e).__name__)
         finally:
             if session:  # stream ended, app stopped or connection dropped; a reconnect starts a new row
                 try:
@@ -439,13 +553,17 @@ def _yt_chat(info: dict, continuation: str) -> dict:
         return json.load(r).get("continuationContents", {}).get("liveChatContinuation", {})
 
 
-async def youtube(handle: str, emit, status, tally=None) -> None:
+async def youtube(handle: str, emit, status, tally=None, *, identity=None, on_identity=None) -> None:
     """Chat of the channel's current live stream, read the way the live page itself does (no API key, no login).
     The backlog YouTube sends on (re)connect is skipped so the banner never replays old chat."""
     handle = handle.strip().lstrip("@")
+    identity = identity if identity is not None else {}
     while True:
         try:
-            info = yt_page(await asyncio.to_thread(_yt_get, f"https://www.youtube.com/@{handle}/live"))
+            if on_identity:
+                handle = (await refresh_identity("youtube", "@" + handle, identity, on_identity)).lstrip("@")
+            path = "channel/" + identity["id"] if identity and identity.get("id") else "@" + handle
+            info = yt_page(await asyncio.to_thread(_yt_get, f"https://www.youtube.com/{path}/live"))
             if not info:
                 status(f"YouTube: waiting for @{handle} to go live")
                 await asyncio.sleep(60)
@@ -482,7 +600,8 @@ async def youtube(handle: str, emit, status, tally=None) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            status(f"YouTube: retrying ({e.__class__.__name__})")
+            code = getattr(e, "code", 0)
+            status(f"YouTube: can't find @{handle}" if code == 404 else f"YouTube: retrying ({code or e.__class__.__name__})")
             log.warning("youtube: %r", e)
             await asyncio.sleep(30)
 
@@ -490,7 +609,8 @@ async def youtube(handle: str, emit, status, tally=None) -> None:
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
                 sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
-                show_tag: bool = False, on_connect=None, *, on_session=None, webhook: str = "") -> None:
+                show_tag: bool = False, on_connect=None, *, on_session=None, webhook: str = "",
+                identities=None, on_identity=None, on_source_status=None, on_batch_sources=None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
@@ -499,6 +619,7 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
     follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None.
     show_tag tags only ASK lines; on_connect fires on each source's connected status transition."""
     queue: list[str] = []
+    queued_platforms: set[str] = set()
     channels = channels or {platform: channel}
     statuses: dict[str, str] = {}
 
@@ -523,6 +644,8 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
             elif ": retrying" in s or ": reconnecting" in s:
                 active = False  # a transport error is not proof that the stream ended
             statuses[p] = s
+            if on_source_status:
+                on_source_status(p, s)
             status(" · ".join(statuses[k] for k in sorted(statuses)))  # "TikTok: … · Twitch: … · YouTube: …"
             if new_connection and on_connect:
                 try:
@@ -530,11 +653,16 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
                 except Exception:
                     log.warning("connection notification failed")
         kwargs: dict = {"tally": tally} if tally else {}
+        if on_identity:
+            kwargs.update(identity=(identities or {}).get(p, {}).copy(), on_identity=lambda found: on_identity(p, found))
+        def emit(line):
+            queue.append(line)
+            queued_platforms.add(p)
         if p == "tiktok":
             if webhook:
                 kwargs["webhook"] = webhook
-            return tiktok(c, queue.append, st, sign_api_key, follow_ask, **kwargs)
-        return youtube(c, queue.append, st, **kwargs) if p == "youtube" else twitch(c, queue.append, st, **kwargs)
+            return tiktok(c, emit, st, sign_api_key, follow_ask, **kwargs)
+        return youtube(c, emit, st, **kwargs) if p == "youtube" else twitch(c, emit, st, **kwargs)
 
     srcs = [asyncio.ensure_future(source(p, c)) for p, c in channels.items()]
     try:
@@ -543,7 +671,12 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
             if queue:
                 lines = queue[:]
                 queue.clear()
-                on_batch(batch(lines, max_lines, show_tag))
+                text = batch(lines, max_lines, show_tag)
+                if on_batch_sources:
+                    on_batch_sources(text, sorted(queued_platforms))
+                else:
+                    on_batch(text)
+                queued_platforms.clear()
         for s in srcs:
             if s.done():
                 s.result()
