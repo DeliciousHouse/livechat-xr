@@ -34,9 +34,9 @@ The layer selects executable basenames at its first handshake. Only matching pro
 
 ## Relay boundary
 
-The relay uses Python's threaded HTTP server and one asyncio loop for stream connections. Registration requests persist JSON under a lock and schedule per-registration chat tasks. Discord posting runs on short-lived threads rather than blocking the chat coroutine. Startup migrates legacy plans, restores every registration with its channel limit and staggers connection attempts to reduce signing-service bursts.
+The relay uses Python's threaded HTTP server and one asyncio loop for stream connections. Registration requests persist JSON under a lock and schedule per-registration chat tasks. Each registration has an ordered Discord sender; HTTP posts run off the event loop rather than blocking chat collection. Startup migrates legacy plans, restores every registration with its channel limit and staggers connection attempts to reduce signing-service bursts.
 
-A small JSON store avoids a database service. Atomic file replacement avoids partial files, but this is a single-process design: do not run multiple replicas against one volume. Failed Discord posts are dropped instead of building an unbounded queue. A busy chat is summarized into a batch rather than delivering each message separately.
+A small JSON store avoids a database service. Atomic file replacement avoids partial files, but this is a single-process design: do not run multiple replicas against one volume. Discord chat posts preserve arrival order in chunks of up to five lines and 2000 UTF-16 units. Failed posts retry (429 honors Retry-After); attempts are capped at 25 per rolling minute. Only unsent backlog older than 60 seconds is summarized as `+N earlier messages`. The PC banner retains its independent three-line limit and `+N more` summary. Queues are in memory, not a durable chat archive.
 
 ## Identity and payment
 

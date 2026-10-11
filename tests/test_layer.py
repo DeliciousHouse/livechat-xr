@@ -42,6 +42,17 @@ class Layer(unittest.TestCase):
         req = LayerRequest(2, 1, C.sizeof(LayerRequest))
         self.assertNotEqual(self.dll.xrNegotiateLoaderApiLayerInterface(C.byref(li), b"x", C.byref(req)), 0)
 
+    def test_short_lines_and_prefixed_gifts(self):
+        for text in ("", "x", "xy", "xyz", "🎵", "▶️", "🎵 x", "🟣 x", "▶️ x",
+                     "🎁 Gift", "🎵 🎁 Gift", "🟣 🎁 Gift", "▶️ 🎁 Gift"):
+            with self.subTest(text=text):
+                buf = (C.c_uint32 * (W * H))()
+                self.dll.livechatxr_render_test(text.encode(), buf)
+                gold = any((p & 0xFF) > 200 and (p & 0xFF) - (p >> 16 & 0xFF) > 120 for p in buf)
+                self.assertEqual(gold, "🎁" in text)
+                if text and "🎁" not in text:
+                    self.assertTrue(any(min(p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF) > 240 for p in buf))
+
     def test_raster(self):
         buf = (C.c_uint32 * (W * H))()
         self.dll.livechatxr_render_test("🎁 BigFan sent Galaxy x3\nViewer One: nice shot!\nSecondPerson: what gun is that 🔫".encode(), buf)

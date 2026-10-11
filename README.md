@@ -11,6 +11,8 @@ Read TikTok LIVE, Twitch or YouTube chat while playing VR. Choose the path that 
 
 The PC banner batches comments (seven seconds and three selected lines by default), prioritizes gifts/support in gold, summarizes overflow and skips your own normal comments. It is not a full chat-history viewer. The PC app can optionally also post to Discord; leave that field empty if your hosted relay already feeds the same channel.
 
+Discord delivery is separate from the banner: every queued chat message is sent in arrival order, in posts of at most five lines and 2000 characters. The sender limits attempts to 25 per minute and retries Discord rate limits. Only unsent backlog older than 60 seconds is collapsed into `+N earlier messages`; your relay account shows cumulative delivered, queued and collapsed counts. The queue is in memory, so stopping/restarting the relay discards pending delivery.
+
 ## First steps
 
 - **PC:** download `LiveChatXR-Setup-<version>.exe` from release **Assets**, run it, enter your TikTok handle, Twitch channel and/or YouTube handle in Settings, save, start the chosen game and **Send test banner**. YouTube chat is read from your channel's public live page (Super Chats and memberships show in gold); no API key or login is needed, and your own messages are skipped. The installer is unsigned; verify its source before accepting a Windows warning. Restart the game after placement/game-list changes.

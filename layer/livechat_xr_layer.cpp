@@ -101,7 +101,7 @@ static void Rasterize(const std::wstring& text, std::vector<uint32_t>& out) {
         DrawTextW(dc, line.c_str(), -1, &calc, flags | DT_CALCRECT);
         DrawTextW(dc, line.c_str(), -1, &r, flags);
         // a platform emoji plus space (chat.ICONS) is 3 UTF-16 units, so a gift may start at 0 or 3
-        COLORREF c = line.compare(0, 2, GIFT) == 0 || line.compare(3, 2, GIFT) == 0 ? GOLD : WHITE;
+        COLORREF c = line.compare(0, 2, GIFT) == 0 || (line.size() >= 5 && line.compare(3, 2, GIFT) == 0) ? GOLD : WHITE;
         for (int row = y; row < calc.bottom && row < H; ++row) rowColor[row] = c;
         y = calc.bottom;
     }
