@@ -356,7 +356,7 @@ def channel_status(token: str, p: str) -> str:
     if discord_error in (401, 404):
         return "Discord rejected the webhook. Paste a new one below."
     if discord_error:
-        return "Discord couldn't accept the last message; retrying on the next batch."
+        return "Discord couldn't accept the last message; queued messages are retrying automatically."
     raw = st.get("status") or next((s for s in status.get(token, "").split(" · ") if s.lower().startswith(p.lower() + ":")), "")
     kind = status_kind(raw)
     if kind == "not_found":
@@ -376,6 +376,17 @@ def channel_status(token: str, p: str) -> str:
     return "Starting: checking your channel automatically."
 
 
+def delivery_status(token: str) -> str:
+    st = stats.get(token, {})
+    received, posted, dropped = (st.get(key, 0) for key in ("lines_received", "lines_posted", "lines_dropped"))
+    pending = max(0, received - posted - dropped)
+    if not received:
+        return "Waiting for chat messages."
+    if not pending and not dropped:
+        return f"All {posted} chat messages delivered."
+    return f"{posted} of {received} chat messages delivered; {pending} queued; {dropped} older messages collapsed."
+
+
 async def run(token: str, delay: float = 0) -> None:
     await asyncio.sleep(delay)  # stagger startup: TikTok's sign server rate-limits connects per IP
     r = regs[token]
@@ -385,12 +396,15 @@ async def run(token: str, delay: float = 0) -> None:
         nonlocal tag_pending
         tag_pending = True
 
-    def post(text: str, platforms=()) -> None:
-        errors = []
-        ok = chat.post_discord(r["webhook"], text, on_error=errors.append) is not False
+    def delivery(received=0, posted=0, dropped_backlog=0, ok=None, error=0, platforms=()) -> None:
         if regs.get(token) is not r:
             return
         st = stats.setdefault(token, {"posts": 0, "fails": 0, "last_post": 0, "last_error": ""})
+        for key, n in (("lines_received", received), ("lines_posted", posted),
+                       ("lines_dropped", dropped_backlog), ("dropped_backlog", dropped_backlog)):
+            st[key] = st.get(key, 0) + n
+        if ok is None:
+            return
         key = "posts" if ok else "fails"
         st[key] = st.get(key, 0) + 1
         if ok:
@@ -400,16 +414,19 @@ async def run(token: str, delay: float = 0) -> None:
             for p in platforms:
                 channel_state(token, p)["last_post"] = st["last_post"]
         else:
-            st["discord_error"] = errors[0] if errors and errors[0] else -1
+            st["discord_error"] = error or -1
             st["last_error"] = time.strftime("%m-%d %H:%M") + " Discord post failed"
 
-    def on_batch(text: str, platforms=()) -> None:
+    sender = chat.DiscordQueue(r["webhook"], on_delivery=delivery)
+    worker = asyncio.create_task(sender.run())
+
+    def on_lines(lines, platforms=()) -> None:
         nonlocal tag_pending
+        tag = ""
         if tag_pending and plan(r) in ("free", "founder"):
-            tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
-            text = text[:2000 - len(tag)] + tag
+            tag = "via LiveChat XR - livechat.deliciouswines.org"
         tag_pending = False
-        threading.Thread(target=post, args=(text, platforms), daemon=True).start()
+        sender.put(lines, platforms, suffix=tag)
 
     def on_status(s: str) -> None:
         if status.get(token) != s:
@@ -425,29 +442,30 @@ async def run(token: str, delay: float = 0) -> None:
                     f.write(json.dumps(row) + "\n")
         except Exception:
             log.warning("stream stats persistence failed")
-        try:
-            post(chat.session_summary(row))
-        except Exception:
-            log.warning("stream stats notification failed")
 
     def on_session(row: dict) -> None:
+        sender.put([chat.session_summary(row)], count=False)
         threading.Thread(target=save_session, args=(row,), daemon=True).start()
 
-    while True:
-        try:
-            await chat.relay(r["platform"], r["channel"], on_batch, on_status, channels=live_channels(r),
-                             on_connect=on_connect, on_session=on_session, identities=r.get("identities", {}),
-                             on_identity=lambda p, found: remember_identity(token, p, found, expected=r),
-                             on_source_status=lambda p, s: source_status(token, p, s) if regs.get(token) is r else None,
-                             on_batch_sources=on_batch)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            on_status(f"error, retrying ({type(e).__name__})")
-            for p in live_channels(r):
-                source_status(token, p, f"{LABEL[p]}: retrying ({type(e).__name__})")
-            log.warning("%s: %s", channel_label(r), type(e).__name__)
-            await asyncio.sleep(60)
+    try:
+        while True:
+            try:
+                await chat.relay(r["platform"], r["channel"], lambda _: None, on_status, channels=live_channels(r),
+                                 on_connect=on_connect, on_session=on_session, identities=r.get("identities", {}),
+                                 on_identity=lambda p, found: remember_identity(token, p, found, expected=r),
+                                 on_source_status=lambda p, s: source_status(token, p, s) if regs.get(token) is r else None,
+                                 on_lines=on_lines)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                on_status(f"error, retrying ({type(e).__name__})")
+                for p in live_channels(r):
+                    source_status(token, p, f"{LABEL[p]}: retrying ({type(e).__name__})")
+                log.warning("%s: %s", channel_label(r), type(e).__name__)
+                await asyncio.sleep(60)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
 
 
 def start(token: str, delay: float = 0) -> None:
@@ -643,7 +661,8 @@ Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open a
 MANAGE = """<h1>Your relay account</h1>{msg}
 <section class="box" aria-labelledby="relay-status"><h2 id="relay-status">Channel status</h2>{channels}
 <div class="channel-row"><b>Discord:</b> webhook “{dname}”
-<div class="hint">Use Send test message to check delivery.</div></div></section>{billing}
+<div class="hint">Use Send test message to check delivery.</div>
+<div class="hint" role="status">{delivery}</div></div></section>{billing}
 <p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
 whenever you go live.</p>
 {settings}
@@ -856,6 +875,7 @@ class Handler(BaseHTTPRequestHandler):
             channels="".join(f'<div class="channel-row"><b>{LABEL[p]}:</b> {html.escape(c)}'
                              f'<div class="hint">{html.escape(channel_status(token, p))}</div></div>' for p, c in channels(r).items()),
             dname=html.escape(r["discord_channel"]),
+            delivery=html.escape(delivery_status(token)),
             settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing),
             ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
             .replace(b'</main>', (PROBE_STATUS.format(status=html.escape(status.get(token, "starting…"))) + '</main>').encode()))

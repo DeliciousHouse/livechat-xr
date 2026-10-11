@@ -61,19 +61,20 @@ class StreamStats(unittest.TestCase):
                         def post(url, text, **kwargs):
                             posts.append(text)
                             if not text.startswith("Stream ended"):
-                                delivered.put_nowait(None)
+                                asyncio_loop.call_soon_threadsafe(delivered.put_nowait, None)
 
                         def thread(target, args, **kwargs):
                             return mock.Mock(start=lambda: target(*args))
 
                         qa_relay.server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan,
                                                          webhook=qa_relay.HOOKS["fixture-one"])
+                        asyncio_loop = asyncio.get_running_loop()
                         with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
-                                mock.patch.object(chat, "post_discord", side_effect=post), \
-                                mock.patch("threading.Thread", side_effect=thread):
+                                mock.patch.object(chat, "post_discord", side_effect=post):
                             task = asyncio.create_task(qa_relay.server.run("qa"))
                             try:
                                 await asyncio.wait_for(finished.wait(), 2)
+                                await asyncio.sleep(.03)
                             finally:
                                 task.cancel()
                                 with self.assertRaises(asyncio.CancelledError):
@@ -86,7 +87,7 @@ class StreamStats(unittest.TestCase):
                     self.assertEqual(intros, [platform] * 3)
                     self.assertEqual(posts, ["Fan: first" + (tag if plan in ("free", "founder") else ""), "Fan: second",
                                              chat.session_summary(rows[0]), chat.session_summary(rows[1]),
-                                             "x" * (2000 - len(tag)) + tag if plan in ("free", "founder") else "x" * 2000])
+                                             "x" * 2000] + ([tag.lstrip("\n")] if plan in ("free", "founder") else []))
 
     def test_summary(self):
         row: dict = dict(start="2026-10-10T00:00:00+00:00", end="2026-10-10T01:42:00+00:00",
@@ -132,28 +133,39 @@ class StreamStats(unittest.TestCase):
         self.assertEqual(seen, [qa_relay.HOOKS["fixture-one"]])
 
     def test_server_stats_write_and_post_failures_are_isolated(self):
+        posted = threading.Event()
+        attempts = []
         async def relay(platform, channel, on_batch, status, **kwargs):
             row = chat.Tally(platform, channel).row()
             kwargs["on_session"](row)
-            on_batch("One: chat continues")
+            await asyncio.sleep(.03)
+            kwargs["on_lines"](["One: chat continues"], [platform])
+            self.assertTrue(await asyncio.to_thread(posted.wait, 2))
+            await asyncio.sleep(.01)
             raise asyncio.CancelledError
 
-        def thread(target, args, **kwargs):
-            return mock.Mock(start=lambda: target(*args))
+        def post(url, text, **kwargs):
+            attempts.append(text)
+            if len(attempts) == 1:
+                kwargs["on_error"](429)
+                kwargs["on_retry"](.01)
+                return False
+            if text == "One: chat continues":
+                posted.set()
+            return True
 
         with qa_relay.fixture(), mock.patch.object(chat, "relay", relay), \
-                mock.patch.object(chat, "post_discord", side_effect=[OSError("fixture post failure"), True]) as post, \
-                mock.patch("threading.Thread", side_effect=thread), \
+                mock.patch.object(chat, "post_discord", side_effect=post), \
                 mock.patch("builtins.open", side_effect=OSError("fixture write failure")), \
                 self.assertLogs("relay", level="WARNING") as logs:
             qa_relay.server.regs["fixture-registration"] = dict(platform="tiktok", channel="@qa",
                                                               webhook=qa_relay.HOOKS["fixture-one"])
             with self.assertRaises(asyncio.CancelledError):
                 asyncio.run(qa_relay.server.run("fixture-registration"))
-            self.assertEqual(post.call_args_list[-1].args[1], "One: chat continues")
-            self.assertEqual(post.call_count, 2)
+            self.assertEqual(attempts[-1], "One: chat continues")
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(attempts[0], attempts[1])
             self.assertIn("stream stats persistence failed", "\n".join(logs.output))
-            self.assertIn("stream stats notification failed", "\n".join(logs.output))
 
     def test_relay_persists_and_posts_once_per_offline_connection(self):
         posted = threading.Event()
@@ -191,7 +203,7 @@ class StreamStats(unittest.TestCase):
             self.assertEqual([row[k] for k in ("registration_id", "platform", "comments", "distinct_chatters",
                                               "gifts", "peak_viewers", "new_follows")],
                              ["fixture-registration", "tiktok", 3, 2, 5, 9, 1])
-            post.assert_called_once_with(qa_relay.HOOKS["fixture-one"], chat.session_summary(row), on_error=mock.ANY)
+            post.assert_called_once_with(qa_relay.HOOKS["fixture-one"], chat.session_summary(row), on_error=mock.ANY, on_retry=mock.ANY)
 
     def test_reconnect_reset_and_callback_failure_do_not_stop_chat(self):
         rows, batches = [], []

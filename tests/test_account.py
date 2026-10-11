@@ -135,27 +135,52 @@ class Account(unittest.TestCase):
         async def relay(*args, **kwargs):
             kwargs['on_source_status']('twitch', 'Twitch: connected to #someone')
             kwargs['on_source_status']('youtube', 'YouTube: waiting for @other to go live')
-            kwargs['on_batch_sources']('Fan: fixture chat', ['twitch'])
+            kwargs['on_lines'](['Fan: fixture chat'], ['twitch'])
+            await asyncio.wait_for(attempt.wait(), 2)
+            async def recorded():
+                while not server.stats[token].get('fails' if rejecting else 'posts'):
+                    await asyncio.sleep(.001)
+            await asyncio.wait_for(recorded(), 2)
             raise asyncio.CancelledError
-        def thread(target, args, **kwargs):
-            return mock.Mock(start=lambda: target(*args))
-        def rejected(url, text, *, on_error):
+        def rejected(url, text, *, on_error, on_retry):
             on_error(401)
+            event_loop.call_soon_threadsafe(attempt.set)
             return False
-        with mock.patch.object(chat, 'relay', relay), mock.patch('threading.Thread', side_effect=thread):
+        def accepted(*args, **kwargs):
+            event_loop.call_soon_threadsafe(attempt.set)
+            return True
+        async def run():
+            nonlocal attempt, event_loop
+            attempt, event_loop = asyncio.Event(), asyncio.get_running_loop()
+            await server.run(token)
+        attempt, event_loop = None, None
+        rejecting = True
+        with mock.patch.object(chat, 'relay', relay):
             with mock.patch.object(chat, 'post_discord', rejected):
                 with self.assertRaises(asyncio.CancelledError):
-                    asyncio.run(server.run(token))
+                    asyncio.run(run())
             self.assertEqual(server.stats[token]['fails'], 1)
             self.assertIn('Discord rejected the webhook', server.channel_status(token, 'twitch'))
             self.assertEqual(server.diagnostic(token)['channels'][0]['last_error'], 'discord_rejected')
-            with mock.patch.object(chat, 'post_discord', return_value=True):
+            rejecting = False
+            with mock.patch.object(chat, 'post_discord', side_effect=accepted):
                 with self.assertRaises(asyncio.CancelledError):
-                    asyncio.run(server.run(token))
+                    asyncio.run(run())
         self.assertEqual(server.stats[token]['posts'], 1)
         self.assertEqual(server.stats[token]['discord_error'], 0)
         self.assertGreater(server.channel_state(token, 'twitch')['last_post'], 0)
         self.assertNotIn('last_post', server.channel_state(token, 'youtube'))
+        self.assertEqual(server.stats[token]['lines_posted'], 1)
+        self.assertEqual(server.stats[token]['lines_dropped'], 0)
+
+    def test_delivery_counts_in_account_status(self):
+        token = self.register()
+        server.stats[token] = dict(lines_received=214, lines_posted=214, lines_dropped=0)
+        body = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
+        self.assertIn("All 214 chat messages delivered.", body)
+        server.stats[token].update(lines_received=220, lines_dropped=2, dropped_backlog=2)
+        body = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
+        self.assertIn("214 of 220 chat messages delivered; 4 queued; 2 older messages collapsed.", body)
 
     def test_webhook_collision_and_stale_identity_cannot_overwrite_account(self):
         token = self.register()
