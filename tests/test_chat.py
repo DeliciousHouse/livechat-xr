@@ -73,7 +73,7 @@ class Twitch(unittest.TestCase):
                  b"@msg-id=resub :tmi.twitch.tv USERNOTICE #chan\r\n",
                  b":chan!chan@c PRIVMSG #chan :my own message\r\n", b""]
         reader = mock.Mock(readline=mock.AsyncMock(side_effect=lines))
-        writer = mock.Mock(drain=mock.AsyncMock())
+        writer = mock.Mock(drain=mock.AsyncMock(), wait_closed=mock.AsyncMock())
         out, sleeps = [], []
         tally = chat.Tally("twitch", "chan")
 

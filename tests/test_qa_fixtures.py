@@ -21,7 +21,7 @@ class RelayFixture(unittest.TestCase):
         relay = chat.relay
         tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
 
-        async def source(channel, emit, status, key="", ask=None, tally=None):
+        async def source(channel, emit, status, key="", ask=None, tally=None, **kwargs):
             status(f"{platform}: connected to qa")
             emit("Fan: first")
             await asyncio.sleep(0.03)
@@ -48,7 +48,7 @@ class RelayFixture(unittest.TestCase):
                     def thread(target, args, daemon):
                         return mock.Mock(start=lambda: target(*args))
                     with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
-                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text: posts.append(text)), \
+                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text, **kw: posts.append(text)), \
                             mock.patch.object(server.threading, "Thread", side_effect=thread):
                         async def go():
                             task = asyncio.create_task(server.run("qa"))

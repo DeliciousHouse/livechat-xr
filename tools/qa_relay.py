@@ -65,9 +65,9 @@ class Handler(server.Handler):
                             b"Keep this fixture manage link for test/delete. No real chat is connected or posted.")
         super().send(code, body, location)
 
-    def register(self, form):
+    def register(self, form, edit_token=""):
         form["webhook"] = HOOKS.get(form.get("webhook"), form.get("webhook", ""))
-        super().register(form)
+        super().register(form, edit_token)
 
     def do_GET(self):
         if self.path.split("?")[0].startswith("/qa-payment/"):
@@ -99,7 +99,8 @@ def fixture(port=0):
                       check_webhook=check_webhook, start=start, stop=lambda token: server.status.pop(token, None))
         for key, value in values.items():
             stack.enter_context(mock.patch.object(server, key, value))
-        stack.enter_context(mock.patch.object(chat, "post_discord", lambda url, text: url in HOOKS.values()))
+        stack.enter_context(mock.patch.object(chat, "post_discord", lambda url, text, **kwargs: url in HOOKS.values()))
+        stack.enter_context(mock.patch.object(chat, "resolve_identity", return_value=None))
         # Fail closed even if an unexpected request reaches an otherwise unused OAuth boundary.
         stack.enter_context(mock.patch("urllib.request.urlopen", side_effect=RuntimeError("external network disabled")))
         home = server.home

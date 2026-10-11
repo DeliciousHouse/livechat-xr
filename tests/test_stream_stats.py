@@ -25,7 +25,7 @@ class StreamStats(unittest.TestCase):
                     async def go():
                         delivered, finished = asyncio.Queue(), asyncio.Event()
 
-                        async def source(channel, emit, status, *args, tally=None):
+                        async def source(channel, emit, status, *args, tally=None, **kwargs):
                             assert tally is not None
                             status(f"{platform}: connected to qa")
                             tally.comment("one")
@@ -58,7 +58,7 @@ class StreamStats(unittest.TestCase):
                             kwargs["on_connect"] = on_connect
                             await relay(*args, seconds=.01, **kwargs)
 
-                        def post(url, text):
+                        def post(url, text, **kwargs):
                             posts.append(text)
                             if not text.startswith("Stream ended"):
                                 delivered.put_nowait(None)
@@ -157,7 +157,7 @@ class StreamStats(unittest.TestCase):
 
     def test_relay_persists_and_posts_once_per_offline_connection(self):
         posted = threading.Event()
-        async def fake_tiktok(user, emit, status, key="", ask=None, tally=None):
+        async def fake_tiktok(user, emit, status, key="", ask=None, tally=None, **kwargs):
             assert tally is not None
             status("TikTok: connected to @qa")
             tally.comment("one")
@@ -181,7 +181,7 @@ class StreamStats(unittest.TestCase):
                     await task
 
         with qa_relay.fixture(), mock.patch.object(chat, "tiktok", fake_tiktok), \
-                mock.patch.object(chat, "post_discord", side_effect=lambda *_: posted.set() or True) as post:
+                mock.patch.object(chat, "post_discord", side_effect=lambda *_, **kw: posted.set() or True) as post:
             qa_relay.server.regs["fixture-registration"] = dict(platform="tiktok", channel="@qa",
                                                               webhook=qa_relay.HOOKS["fixture-one"])
             asyncio.run(go())
@@ -191,7 +191,7 @@ class StreamStats(unittest.TestCase):
             self.assertEqual([row[k] for k in ("registration_id", "platform", "comments", "distinct_chatters",
                                               "gifts", "peak_viewers", "new_follows")],
                              ["fixture-registration", "tiktok", 3, 2, 5, 9, 1])
-            post.assert_called_once_with(qa_relay.HOOKS["fixture-one"], chat.session_summary(row))
+            post.assert_called_once_with(qa_relay.HOOKS["fixture-one"], chat.session_summary(row), on_error=mock.ANY)
 
     def test_reconnect_reset_and_callback_failure_do_not_stop_chat(self):
         rows, batches = [], []

@@ -76,6 +76,11 @@ class Server(unittest.TestCase):
         server.regs.clear()
         server.founders.clear()
         server.status.clear()
+        server.stats.clear()
+        server.reports.clear()
+        resolver = mock.patch.object(chat, "resolve_identity", return_value=None)
+        resolver.start()
+        self.addCleanup(resolver.stop)
         self.check_channel = mock.Mock(return_value=True)
         patcher = mock.patch.object(server, "check_channel", self.check_channel)
         patcher.start()
@@ -83,7 +88,7 @@ class Server(unittest.TestCase):
         self.posts, self.started = [], []
         server.check_webhook = lambda url: "LiveChat XR"
         self.addCleanup(setattr, chat, "post_discord", chat.post_discord)  # other test modules need the real one
-        chat.post_discord = lambda url, text: self.posts.append((url, text))
+        chat.post_discord = lambda url, text, **kwargs: self.posts.append((url, text))
         server.start = lambda token, delay=0: self.started.append(token)
         server.stop = lambda token: None
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -93,6 +98,7 @@ class Server(unittest.TestCase):
 
     def tearDown(self):
         self.srv.shutdown()
+        self.srv.server_close()
 
     def post(self, path, **form):
         try:
@@ -181,7 +187,8 @@ class Server(unittest.TestCase):
         self.assertEqual(self.check_channel.call_args_list, [mock.call("tiktok", "@Ann.1"), mock.call("twitch", "someone")])
         self.assertIn("TikTok @Ann.1 · Twitch someone", self.posts[-1][1])
         manage = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
-        self.assertIn("<b>TikTok:</b> @Ann.1<br><b>Twitch:</b> someone", manage)
+        self.assertIn("<b>TikTok:</b> @Ann.1", manage)
+        self.assertIn("<b>Twitch:</b> someone", manage)
         self.assertIn("TikTok @Ann.1 · Twitch someone", server.admin_body())
         # a Twitch-only error is reported for Twitch, and both values stay in the form
         self.check_channel.side_effect = lambda p, c: p != "twitch"
@@ -251,10 +258,9 @@ class Server(unittest.TestCase):
         token = next(iter(server.regs))
         server.status[token] = "TikTok: can't find @ann1. Check the spelling or permission to go LIVE; retrying in 30 minutes."
         body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
-        for page in (body, server.admin_body()):
-            self.assertIn("Check the spelling or permission to go LIVE", page)
-            self.assertIn("retrying in 30 minutes", page)
-        self.assertIn("This updates your existing registration", body)
+        self.assertIn("Check the spelling below", body)
+        self.assertIn("Edit settings", body)
+        self.assertIn("Check the spelling or permission to go LIVE", server.admin_body())
 
     def webhook_event(self, event, secret="whsec_test", ts=None):
         body = json.dumps(event).encode()
@@ -320,8 +326,9 @@ class Server(unittest.TestCase):
                 mock.patch.object(server, "PAY_MONTHLY", "https://buy.stripe.com/m"), \
                 mock.patch.object(server, "PAY_YEARLY", "https://buy.stripe.com/y"):
             body = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
-            self.assertIn("Twitch:</b> someone — waiting for upgrade", body)
-            self.assertIn("YouTube:</b> @third — waiting for upgrade", body)
+            self.assertIn("Twitch:</b> someone", body)
+            self.assertIn("YouTube:</b> @third", body)
+            self.assertEqual(body.count("Waiting for upgrade"), 2)
             for link in ("m", "y"):
                 self.assertIn(f"https://buy.stripe.com/{link}?client_reference_id={token}", body)
             paid = {"type": "checkout.session.completed", "data": {"object": {
