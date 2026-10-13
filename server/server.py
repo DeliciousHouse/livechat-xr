@@ -4,6 +4,8 @@ posts their stream chat to that Discord channel. The Discord app on a standalone
 Billing: the first FREE_SLOTS sign-ups are founders with all channels free forever. Later sign-ups
 run one channel free; a signed Stripe paid checkout enables all saved channels. A cancelled
 subscription returns to one free channel without deleting the others.
+With DONATE_URL set the relay is free for everyone: every plan runs all saved channels and the pages ask for
+donations instead of showing prices (existing paid subscriptions keep working until cancelled).
 
 No accounts: the webhook URL is the credential (whoever has it can already post there). Registering the
 same webhook again updates it. Each registration gets a private manage link, which is also posted into
@@ -41,6 +43,7 @@ PAY_MONTHLY = os.environ.get("PAY_MONTHLY", "")  # Stripe Payment Link URLs
 PAY_YEARLY = os.environ.get("PAY_YEARLY", "")
 BILLING_URL = os.environ.get("BILLING_URL", "")  # Stripe customer portal login link (manage / cancel)
 STRIPE_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+DONATE_URL = os.environ.get("DONATE_URL", "")  # set = free for everyone + a donate button (e.g. a Stripe pay-what-you-want link)
 DISCORD_ID = os.environ.get("DISCORD_CLIENT_ID", "")  # one-click "Connect Discord" (OAuth scope webhook.incoming)
 DISCORD_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
@@ -163,7 +166,7 @@ def plan(r: dict) -> str:
 
 def live_channels(r: dict) -> dict[str, str]:
     saved = channels(r)
-    return dict(list(saved.items())[:1]) if plan(r) == "free" else saved
+    return dict(list(saved.items())[:1]) if plan(r) == "free" and not DONATE_URL else saved
 
 
 def free_used() -> int:
@@ -587,9 +590,7 @@ BigFan: nice shot!
 Mike: GG
 +2 more</div></div></div>
 <figcaption class="cap" data-pretext>What you see in the headset: a normal Quest notification, mid-game.</figcaption></figure>
-<span class="chip">First {free_slots} streamer{plural}: everything free.</span>
-<p class="pricing">After that: 1 channel free, multiple channels on a paid plan ($3/month or $25/year).</p>
-<p class="hint">Free posts carry a one-line tag; paid posts do not.</p></div>
+{pricing}</div>
 {msg}
 <form class="card" method="post" action="/register" aria-label="Set up LiveChat XR for Discord">
 <section class="step" aria-labelledby="s1"><div class="n" aria-hidden="true">1</div><div><h2 id="s1">Your channel</h2>
@@ -599,8 +600,7 @@ maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle or youtube.com URL"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-<div class="hint">Fill in any of them. On the free plan, only the first filled channel runs (TikTok, then Twitch, then YouTube).
-Founders and paid plans run all saved channels in the same Discord channel.</div>
+<div class="hint">{channels_hint}</div>
 {google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
 <div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
 </div></section>
@@ -712,9 +712,20 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
                   'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
                   'gwho.textContent="Signed in with Google ✔"}</script>')
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
+    if DONATE_URL:
+        pricing = ('<span class="chip">Free for every streamer, every channel.</span>'
+                   '<p class="pricing">LiveChat XR runs on donations. If it helps your streams, '
+                   f'<a href="{html.escape(DONATE_URL)}">chip in what you like</a>.</p>'
+                   '<p class="hint">Posts carry a one-line LiveChat XR tag.</p>')
+        channels_hint = "Fill in any of them. All of them run in the same Discord channel."
+    else:
+        pricing = (f'<span class="chip">First {FREE_SLOTS} streamer{"" if FREE_SLOTS == 1 else "s"}: everything free.</span>'
+                   '<p class="pricing">After that: 1 channel free, multiple channels on a paid plan ($3/month or $25/year).</p>'
+                   '<p class="hint">Free posts carry a one-line tag; paid posts do not.</p>')
+        channels_hint = ("Fill in any of them. On the free plan, only the first filled channel runs (TikTok, then Twitch, then YouTube).\n"
+                         "Founders and paid plans run all saved channels in the same Discord channel.")
     return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note, icon=DISCORD_ICON,
-                            free_slots=FREE_SLOTS, plural="" if FREE_SLOTS == 1 else "s",
-                            **values) + PRETEXT_JS, ga="/")
+                            pricing=pricing, channels_hint=channels_hint, **values) + PRETEXT_JS, ga="/")
 
 
 def google_identity(credential: str) -> tuple[str, str]:
@@ -834,7 +845,7 @@ def admin_body() -> str:
             'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
-            f'{sum(plan(r) == "free" and len(channels(r)) > 1 for r in regs.values())} waiting upgrade. {live} live right now. '
+            f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
             f'{warn} warnings in the recent log.<br>{backup_line()} <small>Refreshes every 30 s.</small></div>'
             '<table cellpadding=6 width=100%><tr><th>User</th><th>Channel</th><th>Plan</th><th>Status</th><th>Posts</th>'
             f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table>'
@@ -863,7 +874,10 @@ class Handler(BaseHTTPRequestHandler):
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
         billing = ""
-        if plan(r) == "free":
+        if DONATE_URL and plan(r) != "paid":
+            billing = ('<div class="box"><b>Free: all your channels run.</b> LiveChat XR runs on donations. '
+                       f'<a href="{html.escape(DONATE_URL)}">Support it</a> if it helps your streams.</div>')
+        elif plan(r) == "free":
             q = f"?client_reference_id={token}&prefilled_email={quote(r['email'])}"
             links = " · ".join(f'<a href="{html.escape(url + q)}">{label}</a>'
                                for url, label in ((PAY_MONTHLY, "$3 / month"), (PAY_YEARLY, "$25 / year")) if url)

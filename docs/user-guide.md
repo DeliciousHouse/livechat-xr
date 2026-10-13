@@ -100,7 +100,7 @@ Twitch and YouTube retain permanent channel IDs and automatically follow renamed
 
 ## Pricing and billing
 
-First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan (**$3 per month** or **$25 per year**). Founder slots are per registration/webhook and last forever; updating with the same webhook keeps that plan. Deleting a founder does not reopen a founder slot. The service also has a total capacity limit and can say it is full.
+The relay is free for every streamer and runs all your saved channels; it asks for [donations](https://buy.stripe.com/8x200kaXv3rQ5XmcV90x203) instead of charging. Anyone who subscribed earlier keeps that subscription until they cancel it (see below). Founder slots are per registration/webhook and last forever; updating with the same webhook keeps that plan. Deleting a founder does not reopen a founder slot. The service also has a total capacity limit and can say it is full.
 
 On the free plan, the first filled channel runs (TikTok, then Twitch, then YouTube). You may save all three; your manage page marks extra channels **waiting for upgrade**. Founders and paid users run all saved channels.
 
