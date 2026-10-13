@@ -27,6 +27,7 @@ DEFAULTS = {
              "platform_icons": "true", "viewer_count": "true"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
+    "viewers": {"up": "0.36", "right": "0.45", "distance": "1.0", "width": "0.44"},  # read by the layer only
 }
 PLATFORMS = ("tiktok", "twitch", "youtube")
 log = logging.getLogger("livechatxr")
@@ -76,11 +77,11 @@ def batch(lines: list[str], max_lines: int = 3, show_tag: bool = False) -> str:
     return "\n".join(shown) + (f"\n+{extra} more" if extra else "")
 
 
-def write_banner(text: str) -> None:
+def write_banner(text: str, name: str = "banner.txt") -> None:
     DIR.mkdir(parents=True, exist_ok=True)
-    tmp = DIR / "banner.tmp"
+    tmp = DIR / (name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, DIR / "banner.txt")  # atomic: the layer never reads a half-written file
+    os.replace(tmp, DIR / name)  # atomic: the layer never reads a half-written file
 
 
 def post_discord(webhook: str, text: str, *, on_error=None, on_retry=None) -> bool:
@@ -713,6 +714,7 @@ async def youtube(handle: str, emit, status, tally=None, *, identity=None, on_id
 
 
 # ---------------------------------------------------------------- viewer counts (PC banner footer)
+VIEWERS_EVERY = 5  # seconds between viewers.txt writes; the layer hides it 20 s after the last one
 _TWITCH_WEB_CLIENT = "kimne78kx3ncx6brgo4mv6wki5h1ko"  # twitch.tv's own public web client id; no login, no secret
 
 
@@ -734,12 +736,9 @@ def viewer_count(platform: str, channel: str) -> int | None:
     return None
 
 
-def viewer_line(counts: dict[str, int | None]) -> str:
-    """'7 watching · 🎵 4 · 🟣 1 · ▶️ 2' for the platforms with a known count; '' when none is live."""
-    live = [(p, counts[p]) for p in PLATFORMS if counts.get(p) is not None]
-    if not live:
-        return ""
-    return " · ".join([f"{sum(n for _, n in live)} watching"] + [f"{ICONS[p]}{n}" for p, n in live])
+def viewer_lines(counts: dict[str, int | None]) -> str:
+    """viewers.txt for the layer's corner box: 'tiktok 4\\ntwitch 1' for live platforms; '' (hidden) when none is."""
+    return "\n".join(f"{p} {counts[p]}" for p in PLATFORMS if counts.get(p) is not None)
 
 
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
@@ -848,20 +847,10 @@ class Runner:
     async def _main(self, cfg: configparser.ConfigParser) -> None:
         webhook = cfg["chat"].get("discord_webhook", "").strip()
         show_tag = cfg.getboolean("chat", "show_tag", fallback=True)
-        seconds = cfg.getfloat("banner", "seconds", fallback=7)
         counts: dict[str, int | None] = {}
-        last = ["", 0.0]  # newest chat batch and when it arrived
-
-        def refresh() -> None:
-            """Viewer line on top of the banner, plus the chat batch while it is younger than the banner time."""
-            fresh = last[0] if time.monotonic() - last[1] < seconds else ""
-            text = "\n".join(t for t in (viewer_line(counts), fresh) if t)
-            if text:
-                write_banner(text)
 
         def on_batch(text: str) -> None:
-            last[:] = text, time.monotonic()
-            refresh()
+            write_banner(text)
 
         async def poll(p: str, c: str) -> None:
             while True:
@@ -872,11 +861,10 @@ class Runner:
                     log.warning("%s viewers: %s", p, type(e).__name__)
                 await asyncio.sleep(30)
 
-        async def keep_fresh() -> None:  # the layer hides banner.txt `seconds` after its last write
+        async def keep_fresh() -> None:  # the layer hides viewers.txt 20 s after its last write
             while True:
-                await asyncio.sleep(max(seconds / 3, 0.01))
-                if viewer_line(counts):
-                    refresh()
+                write_banner(viewer_lines(counts), "viewers.txt")
+                await asyncio.sleep(VIEWERS_EVERY)
 
         tasks = []
         viewers_on = cfg.getboolean("chat", "viewer_count", fallback=True)
@@ -898,6 +886,8 @@ class Runner:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            if viewers_on:
+                write_banner("", "viewers.txt")  # empty hides the corner box at once
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()

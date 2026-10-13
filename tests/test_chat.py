@@ -191,7 +191,7 @@ class Relay(unittest.TestCase):
                         await task
 
                 asyncio.run(go())
-                texts = [c.args[0] for c in banner.call_args_list]
+                texts = [c.args[0] for c in banner.call_args_list if len(c.args) == 1]  # banner.txt only
                 intro = "LiveChat XR - livechat.deliciouswines.org"
                 self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\n" + chat.ICONS[platform] + "Fan: hi", intro] if enabled
                                  else ["» follow me\nFan: hi"])
@@ -553,11 +553,11 @@ class FollowAsk(unittest.TestCase):
 
 
 class Viewers(unittest.TestCase):
-    def test_line_totals_live_platforms_with_their_emoji(self):
-        self.assertEqual(chat.viewer_line({}), "")
-        self.assertEqual(chat.viewer_line({"twitch": None, "youtube": None}), "")
-        self.assertEqual(chat.viewer_line({"youtube": 2, "twitch": 1, "tiktok": 4}), "7 watching · 🎵 4 · 🟣 1 · ▶️ 2")
-        self.assertEqual(chat.viewer_line({"twitch": 0, "youtube": None}), "0 watching · 🟣 0")
+    def test_lines_list_live_platforms_for_the_layer(self):
+        self.assertEqual(chat.viewer_lines({}), "")
+        self.assertEqual(chat.viewer_lines({"twitch": None, "youtube": None}), "")
+        self.assertEqual(chat.viewer_lines({"youtube": 2, "twitch": 1, "tiktok": 4}), "tiktok 4\ntwitch 1\nyoutube 2")
+        self.assertEqual(chat.viewer_lines({"twitch": 0, "youtube": None}), "twitch 0")
 
     def test_twitch_and_youtube_counts(self):
         def gql(stream):
@@ -576,7 +576,7 @@ class Viewers(unittest.TestCase):
         with mock.patch.object(chat, "_yt_get", return_value='"originalViewCount":"40"'):  # a VOD page, not live
             self.assertIsNone(chat.viewer_count("youtube", "me"))
 
-    def test_runner_keeps_viewer_line_on_top_and_drops_old_chat(self):
+    def test_runner_writes_viewers_file_and_leaves_the_banner_to_chat(self):
         async def fake_tiktok(user, emit, status, key="", ask=None, *, on_viewers=None, **_):
             on_viewers(5)
             emit("Tk: hi")
@@ -588,22 +588,24 @@ class Viewers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
             cfg = chat.load_config()
         cfg["chat"].update(tiktok="me", twitch="me", show_tag="false", platform_icons="false")
-        cfg["banner"]["seconds"] = "0.15"
+        cfg["banner"]["seconds"] = "0.05"
 
         async def go():
             task = asyncio.create_task(chat.Runner()._main(cfg))
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.4)
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
         with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch), \
-                mock.patch.object(chat, "viewer_count", return_value=3), \
+                mock.patch.object(chat, "viewer_count", return_value=3), mock.patch.object(chat, "VIEWERS_EVERY", 0.05), \
                 mock.patch.object(chat, "write_banner") as banner:
             asyncio.run(go())
-        texts = [c.args[0] for c in banner.call_args_list]
-        self.assertIn("8 watching · 🎵 5 · 🟣 3\nTk: hi", texts)
-        self.assertEqual(texts[-1], "8 watching · 🎵 5 · 🟣 3")  # chat aged out, count stays
-        self.assertGreater(texts.count(texts[-1]), 2)  # rewritten so the layer never hides it
+        calls = [c.args for c in banner.call_args_list]
+        self.assertEqual([c for c in calls if len(c) == 1], [("Tk: hi",)])  # banner: chat only
+        viewers = [c[0] for c in calls if c[1:] == ("viewers.txt",)]
+        self.assertIn("tiktok 5\ntwitch 3", viewers)
+        self.assertGreater(viewers.count("tiktok 5\ntwitch 3"), 2)  # rewritten so the layer keeps showing it
+        self.assertEqual(viewers[-1], "")  # stopping hides the box at once
 
         cfg["chat"]["viewer_count"] = "false"
         seen = []
@@ -617,7 +619,7 @@ class Viewers(unittest.TestCase):
                 mock.patch.object(chat, "viewer_count") as count, mock.patch.object(chat, "write_banner") as banner:
             asyncio.run(go())
         count.assert_not_called()
-        self.assertEqual((seen, [c.args[0] for c in banner.call_args_list]), ([None], ["Tk: hi"]))
+        self.assertEqual((seen, [c.args for c in banner.call_args_list]), ([None], [("Tk: hi",)]))
 
 
 class Discord(unittest.TestCase):

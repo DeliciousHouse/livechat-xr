@@ -137,7 +137,7 @@ class App:
         ttk.Checkbutton(f, text="Platform emoji on each message", variable=self.platform_icons).grid(row=n, column=1, sticky="w", pady=6)
         n += 1
         self.viewer_count = tk.BooleanVar(value=self.cfg.getboolean("chat", "viewer_count", fallback=True))
-        ttk.Checkbutton(f, text="Live viewer count on top of the banner", variable=self.viewer_count).grid(row=n, column=1, sticky="w", pady=6)
+        ttk.Checkbutton(f, text="Live viewer count (top-right corner)", variable=self.viewer_count).grid(row=n, column=1, sticky="w", pady=6)
         n += 1
         self.auto = tk.BooleanVar(value=False if self.portable else autostart_enabled())
         auto = ttk.Checkbutton(f, text="Start with Windows", variable=self.auto)
