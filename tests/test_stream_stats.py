@@ -119,7 +119,7 @@ class StreamStats(unittest.TestCase):
 
     def test_runner_passes_webhook_to_session_source(self):
         seen = []
-        async def source(user, emit, status, key="", ask=None, webhook=""):
+        async def source(user, emit, status, key="", ask=None, webhook="", **_):
             seen.append(webhook)
             raise RuntimeError("fixture stop")
         with qa_relay.fixture(), mock.patch.object(chat, "DIR", qa_relay.server.DATA), \

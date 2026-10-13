@@ -24,7 +24,7 @@ DIR = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "LiveChatXR"
 DEFAULTS = {
     "chat": {"tiktok": "", "twitch": "", "youtube": "", "platform": "twitch", "channel": "", "tiktok_sign_api_key": "",
              "discord_webhook": "", "follow_ask": "follow for the next sword-only run", "show_tag": "true",
-             "platform_icons": "true"},
+             "platform_icons": "true", "viewer_count": "true"},
     "games": {"exes": "PopulationONE.exe"},
     "banner": {"seconds": "7", "up": "0.22", "distance": "1.0", "width": "0.62", "max_lines": "3"},
 }
@@ -457,7 +457,8 @@ class Session:
 
 
 async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None,
-                 tally: Tally | None = None, webhook: str = "", *, identity=None, on_identity=None) -> None:
+                 tally: Tally | None = None, webhook: str = "", *, identity=None, on_identity=None,
+                 on_viewers=None) -> None:
     """follow_ask=None: plain chat (hosted relay). A string turns on a Session per connection: the follow ask
     (empty string = no ask) and a sessions.jsonl row when the connection ends."""
     from TikTokLive import TikTokLiveClient
@@ -520,6 +521,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
                 tally.peak = max(tally.peak or 0, e.total)
             if session and isinstance(getattr(e, "total", None), int):
                 session.viewers(e.total)  # current viewer count; peak_viewers is its max
+            if on_viewers and isinstance(getattr(e, "total", None), int):
+                on_viewers(e.total)
 
         @client.on(GiftEvent)
         async def _(e: GiftEvent):
@@ -551,6 +554,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
             if not offline:
                 log.warning("tiktok: %s", type(e).__name__)
         finally:
+            if on_viewers:
+                on_viewers(None)
             if session:  # stream ended, app stopped or connection dropped; a reconnect starts a new row
                 try:
                     await asyncio.to_thread(session.save, user, webhook)
@@ -707,12 +712,42 @@ async def youtube(handle: str, emit, status, tally=None, *, identity=None, on_id
             await asyncio.sleep(30)
 
 
+# ---------------------------------------------------------------- viewer counts (PC banner footer)
+_TWITCH_WEB_CLIENT = "kimne78kx3ncx6brgo4mv6wki5h1ko"  # twitch.tv's own public web client id; no login, no secret
+
+
+def viewer_count(platform: str, channel: str) -> int | None:
+    """Current viewers of a live Twitch / YouTube stream; None when offline. TikTok pushes its count instead."""
+    channel = channel.strip().lstrip("@#")
+    if platform == "twitch":
+        body = json.dumps({"query": "query($l:String!){user(login:$l){stream{viewersCount}}}",
+                           "variables": {"l": channel.lower()}}).encode()
+        req = urllib.request.Request("https://gql.twitch.tv/gql", body,
+                                     {"Client-Id": _TWITCH_WEB_CLIENT, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            stream = ((json.load(r).get("data") or {}).get("user") or {}).get("stream")
+        return stream["viewersCount"] if stream else None
+    if platform == "youtube":
+        page = _yt_get(f"https://www.youtube.com/@{channel}/live")
+        m = re.search(r'"originalViewCount":"(\d+)"', page)
+        return int(m[1]) if m and re.search(r'"isLive(?:Now)?":true', page) else None
+    return None
+
+
+def viewer_line(counts: dict[str, int | None]) -> str:
+    """'7 watching · 🎵 4 · 🟣 1 · ▶️ 2' for the platforms with a known count; '' when none is live."""
+    live = [(p, counts[p]) for p in PLATFORMS if counts.get(p) is not None]
+    if not live:
+        return ""
+    return " · ".join([f"{sum(n for _, n in live)} watching"] + [f"{ICONS[p]}{n}" for p, n in live])
+
+
 # ---------------------------------------------------------------- relay: chat source -> one batch per window
 async def relay(platform: str, channel: str, on_batch, status, seconds: float = 7, max_lines: int = 3,
                 sign_api_key: str = "", channels: dict[str, str] | None = None, follow_ask: str | None = None,
                 show_tag: bool = False, on_connect=None, *, on_session=None, webhook: str = "",
                 identities=None, on_identity=None, on_source_status=None, on_batch_sources=None,
-                on_lines=None, platform_icons: bool = False) -> None:
+                on_lines=None, platform_icons: bool = False, on_viewers=None) -> None:
     """Run the chat source(s) and call on_batch(text) once per window that had comments. Used by the PC app
     (banner + optional Discord) and by the hosted server (Discord only).
 
@@ -720,7 +755,8 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
     sort before comments); status() then gets the per-platform lines joined with " · ". Without it, platform/channel is one source.
     follow_ask goes to tiktok(): the PC app sets it from config, the hosted relay leaves it None.
     show_tag tags only ASK lines; on_connect fires on each source's connected status transition.
-    platform_icons starts each chat line with its platform's ICONS emoji (follow asks stay unmarked)."""
+    platform_icons starts each chat line with its platform's ICONS emoji (follow asks stay unmarked).
+    on_viewers(count) gets TikTok's live viewer count (None when the connection ends)."""
     queue: list[str] = []
     queued_platforms: set[str] = set()
     channels = channels or {platform: channel}
@@ -764,6 +800,8 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
         if p == "tiktok":
             if webhook:
                 kwargs["webhook"] = webhook
+            if on_viewers:
+                kwargs["on_viewers"] = on_viewers
             return tiktok(c, emit, st, sign_api_key, follow_ask, **kwargs)
         return youtube(c, emit, st, **kwargs) if p == "youtube" else twitch(c, emit, st, **kwargs)
 
@@ -810,12 +848,43 @@ class Runner:
     async def _main(self, cfg: configparser.ConfigParser) -> None:
         webhook = cfg["chat"].get("discord_webhook", "").strip()
         show_tag = cfg.getboolean("chat", "show_tag", fallback=True)
+        seconds = cfg.getfloat("banner", "seconds", fallback=7)
+        counts: dict[str, int | None] = {}
+        last = ["", 0.0]  # newest chat batch and when it arrived
+
+        def refresh() -> None:
+            """Viewer line on top of the banner, plus the chat batch while it is younger than the banner time."""
+            fresh = last[0] if time.monotonic() - last[1] < seconds else ""
+            text = "\n".join(t for t in (viewer_line(counts), fresh) if t)
+            if text:
+                write_banner(text)
 
         def on_batch(text: str) -> None:
-            write_banner(text)
+            last[:] = text, time.monotonic()
+            refresh()
 
+        async def poll(p: str, c: str) -> None:
+            while True:
+                try:
+                    counts[p] = await asyncio.to_thread(viewer_count, p, c)
+                except Exception as e:
+                    counts[p] = None  # an unknown count is left out, never shown as an error
+                    log.warning("%s viewers: %s", p, type(e).__name__)
+                await asyncio.sleep(30)
+
+        async def keep_fresh() -> None:  # the layer hides banner.txt `seconds` after its last write
+            while True:
+                await asyncio.sleep(max(seconds / 3, 0.01))
+                if viewer_line(counts):
+                    refresh()
+
+        tasks = []
+        viewers_on = cfg.getboolean("chat", "viewer_count", fallback=True)
+        if viewers_on:
+            tasks =[poll(p, c) for p, c in channels(cfg).items() if p != "tiktok"] + [keep_fresh()]
         sender = DiscordQueue(webhook) if webhook else None
-        worker = asyncio.create_task(sender.run()) if sender else None
+        tasks += [sender.run()] if sender else []
+        tasks = [asyncio.create_task(t) for t in tasks]
         try:
             await relay("", "", on_batch, self._set_status,
                     cfg.getfloat("banner", "seconds", fallback=7), cfg.getint("banner", "max_lines", fallback=3),
@@ -823,11 +892,12 @@ class Runner:
                     follow_ask=cfg["chat"].get("follow_ask", ""), show_tag=show_tag,
                     on_connect=(lambda: write_banner("LiveChat XR - livechat.deliciouswines.org")) if show_tag else None,
                     webhook=webhook, on_lines=sender.put if sender else None,
-                    platform_icons=cfg.getboolean("chat", "platform_icons", fallback=True))
+                    platform_icons=cfg.getboolean("chat", "platform_icons", fallback=True),
+                    on_viewers=(lambda n: counts.__setitem__("tiktok", n)) if viewers_on else None)
         finally:
-            if worker:
-                worker.cancel()
-                await asyncio.gather(worker, return_exceptions=True)
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     def start(self, cfg: configparser.ConfigParser) -> None:
         self.stop()
