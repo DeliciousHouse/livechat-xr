@@ -86,7 +86,7 @@ class Server(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.posts, self.started = [], []
-        server.check_webhook = lambda url: "LiveChat XR"
+        server.check_webhook = lambda url: {"name": "LiveChat XR"}
         self.addCleanup(setattr, chat, "post_discord", chat.post_discord)  # other test modules need the real one
         chat.post_discord = lambda url, text, **kwargs: self.posts.append((url, text))
         server.start = lambda token, delay=0: self.started.append(token)

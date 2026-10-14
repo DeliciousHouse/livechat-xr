@@ -188,11 +188,17 @@ def stripe_event(body: bytes, header: str, now: float | None = None) -> dict | N
     return json.loads(body)
 
 
-def check_webhook(url: str) -> str:
-    """Returns the webhook's display name; raises if Discord doesn't know it. Only Discord URLs get here."""
+def check_webhook(url: str) -> dict:
+    """The webhook object (name, guild_id, channel_id); raises if Discord doesn't know it. Only Discord URLs get here."""
     req = urllib.request.Request(url, headers={"User-Agent": "LiveChatXR relay"})
     with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r).get("name") or "webhook"
+        return json.load(r)
+
+
+def same_channels(a: dict, b: dict) -> bool:
+    """Any platform handle in common, ignoring @/# and case (TikTok, Twitch and YouTube handles are case-insensitive)."""
+    norm = lambda chans: {(p, c.lstrip("@#").lower()) for p, c in chans.items()}
+    return bool(norm(a) & norm(b))
 
 
 def normalise_channel(platform: str, channel: str) -> str:
@@ -686,8 +692,9 @@ No email, webhook, private link or chat messages are included.</p>
 # Shown open right after sign-up, collapsed afterwards. Mirrors the user guide's Quest troubleshooting row.
 QUEST_CHECKLIST = """<details class="box"{open}><summary><b>{title}</b></summary><ol>
 <li>Install Discord from the Meta Horizon Store on your Quest and sign in with this same Discord account.</li>
-<li>In Discord, open the server and channel you connected. Set the channel's notifications to <b>All Messages</b>,
-and check that neither the channel nor the server is muted.</li>
+<li>In Discord, open {channel}. You should see the "LiveChat XR connected" message there; if you don't, you are on a
+different Discord account or channel. Set the channel's notifications to <b>All Messages</b>, and check that neither the
+channel nor the server is muted.</li>
 <li>In your Quest settings, allow notifications from Discord and turn off Do Not Disturb.</li>
 <li>Put your headset on and press <b>Send test message</b>. A Discord pop-up should appear within a few seconds.</li>
 <li>Open your game and send another test, so you know it shows up in-game before you go live.</li></ol>
@@ -892,6 +899,19 @@ class Handler(BaseHTTPRequestHandler):
         r = regs.get(token)
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
+        # Accounts from before channel links: fill in once, best effort. Never wait for the lock: register() shows
+        # errors through this page while holding it.
+        if not r.get("channel_id") and lock.acquire(blocking=False):
+            try:
+                hook = check_webhook(r["webhook"])
+                r.update(guild_id=str(hook.get("guild_id") or ""), channel_id=str(hook.get("channel_id") or ""))
+                save()
+            except Exception:
+                pass
+            finally:
+                lock.release()
+        open_link = (f'https://discord.com/channels/{r["guild_id"]}/{r["channel_id"]}'
+                     if r.get("guild_id") and r.get("channel_id") else "")
         billing = ""
         if DONATE_URL and plan(r) != "paid":
             billing = ('<div class="box"><b>Free: all your channels run.</b> LiveChat XR runs on donations. '
@@ -910,10 +930,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send(code, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
             checklist=QUEST_CHECKLIST.format(token=token, open=" open" if new else "",
+                                             channel=f'<a href="{open_link}" target="_blank" rel="noopener">the channel you connected</a>'
+                                             if open_link else "the server and channel you connected",
                                              title="Last step: make chat pop up on your Quest" if new else "Quest pop-up checklist"),
             channels="".join(f'<div class="channel-row"><b>{LABEL[p]}:</b> {html.escape(c)}'
                              f'<div class="hint">{html.escape(channel_status(token, p))}</div></div>' for p, c in channels(r).items()),
-            dname=html.escape(r["discord_channel"]),
+            dname=html.escape(r["discord_channel"]) + (f' · <a href="{open_link}" target="_blank" rel="noopener">Open this channel in Discord</a>'
+                                                         if open_link else ""),
             delivery=html.escape(delivery_status(token)),
             settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing),
             ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
@@ -953,7 +976,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, f"ok {len(regs)}".encode())
         if m := re.fullmatch(r"/m/([\w-]{20,64})", path):
             q = parse_qs(self.path.partition("?")[2])
-            return self.manage(m[1], msg=note("Settings saved. Your plan and private link are unchanged.") if q.get("saved") == ["1"] else "",
+            msg = note("Settings saved. Your plan and private link are unchanged.") if q.get("saved") == ["1"] else ""
+            if q.get("moved") == ["1"]:
+                msg += note("You already had a relay for this stream in this Discord server. It now posts to the channel you just picked; nothing is duplicated.")
+            return self.manage(m[1], msg=msg,
                                new=q.get("new", [""])[0])
         self.send(404, page(note("Not found.", True)))
 
@@ -1096,13 +1122,20 @@ class Handler(BaseHTTPRequestHandler):
         if err:
             return fail(err)
         try:
-            dname = check_webhook(webhook)
+            hook = check_webhook(webhook)
         except Exception:
             return fail("Discord didn't accept that webhook. Copy it again from the channel's Integrations page.")
+        dname, guild = hook.get("name") or "webhook", str(hook.get("guild_id") or "")
+        moved_from = ""
         with lock:
             owner = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if edit_token and owner and owner != edit_token:
                 return fail("That webhook is already connected to another relay. Use a different webhook.")
+            if not edit_token and not owner and guild:
+                # Signing up again for the same stream in the same Discord server replaces the earlier relay instead of
+                # running a duplicate. Keyed by server, not email: only someone who manages that server can make its webhook.
+                owner = next((t for t, r in regs.items() if r.get("guild_id") == guild and same_channels(channels(r), wanted)), None)
+                moved_from = regs[owner]["webhook"] if owner else ""
             token = edit_token or owner
             if token is None and len(regs) >= MAX_REGS:
                 return fail("This server is full right now. Try again later.", 503)
@@ -1114,7 +1147,8 @@ class Handler(BaseHTTPRequestHandler):
                 write_json("founders.json", sorted(founders))
             platform, channel = next(iter(wanted.items()))  # primary pair kept for older readers (admin exports, QA tools)
             regs[token] = {**old, "name": name, "email": email, "platform": platform, "channel": channel, "channels": wanted, "webhook": webhook,
-                           "discord_channel": dname, "created": old.get("created", int(time.time())), "plan": p,
+                           "discord_channel": dname, "guild_id": guild, "channel_id": str(hook.get("channel_id") or ""),
+                           "created": old.get("created", int(time.time())), "plan": p,
                            "signin": form.get("signin") or old.get("signin", "email"), "channel_note": channel_note,
                            "platform_icons": bool(form.get("platform_icons")) if form.get("icons_form") else old.get("platform_icons", True)}
             regs[token]["identities"] = {p: ident for p, ident in old.get("identities", {}).items()
@@ -1128,7 +1162,10 @@ class Handler(BaseHTTPRequestHandler):
         waiting = " Extra channels are saved, waiting for upgrade." if len(wanted) > len(live_channels(regs[token])) else ""
         chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {active} will show up here while you're live.{waiting}\n"
                                    f"Manage or stop it: <{manage_url(token)}>")
-        self.send(303, b"", location=f"/m/{token}?saved=1" if edit_token else f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}")
+        if moved_from and moved_from != webhook:  # the audit trail stays in the old channel, without the private link
+            chat.post_discord(moved_from, f"LiveChat XR: chat from {active} moved to another channel in this server after a new sign-up.")
+        self.send(303, b"", location=f"/m/{token}?saved=1" if edit_token else
+                  f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}" + ("&moved=1" if moved_from else ""))
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
         log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
