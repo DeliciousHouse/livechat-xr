@@ -42,6 +42,25 @@ class Account(unittest.TestCase):
             self.assertIn(f"/m/{token}", self.posts[-1][1])
             self.assertEqual(json.loads((server.DATA / "registrations.json").read_text())[token], r)
 
+    def test_donation_mode_runs_every_channel_free_and_asks_for_support(self):
+        url = "https://buy.stripe.com/donate"
+        token = self.register(tiktok="@ann")
+        server.regs[token]["plan"] = "free"
+        self.assertEqual(list(server.live_channels(server.regs[token])), ["tiktok"])  # priced mode: one channel
+        home = urllib.request.urlopen(self.base + "/").read().decode()
+        self.assertIn("$3/month", home)
+        self.assertNotIn(url, home)
+        with mock.patch.object(server, "DONATE_URL", url):
+            self.assertEqual(list(server.live_channels(server.regs[token])), ["tiktok", "twitch"])
+            home = urllib.request.urlopen(self.base + "/").read().decode()
+            self.assertIn(f'href="{url}"', home)
+            self.assertNotIn("$3/month", home)
+            manage = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
+            self.assertIn(f'href="{url}"', manage)
+            self.assertNotIn("$3 / month", manage)
+            server.regs[token]["plan"] = "paid"  # an existing subscriber still sees billing, not a donate ask
+            self.assertNotIn(url, urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
+
     def test_platform_icons_default_on_and_toggle_from_settings(self):
         token = self.register()
         self.assertTrue(server.regs[token]["platform_icons"])

@@ -63,11 +63,11 @@ Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type y
 
 If **Connect Discord** is shown, choose it and select the server/text channel you control in Discord's authorization screen. If you prefer manual setup, expand **Or paste a webhook URL instead**, use the [webhook steps below](#how-to-make-a-discord-webhook), then choose **Connect with webhook**. Without one-click connection configured, the page instead shows **Discord webhook URL** and **Connect**.
 
-You land on your private manage page. Keep its link private and bookmark it; it is also posted to the chosen Discord channel. Every registration starts listening immediately: founders get all saved channels; later free registrations get the first channel. Extra channels are saved and shown as **waiting for upgrade**, with plan links. See [pricing](#pricing-and-billing). A signup confirmation is not proof that your stream or headset is connected.
+You land on your private manage page. Keep its link private and bookmark it; it is also posted to the chosen Discord channel. Every registration starts listening immediately. In donation mode, all saved channels run free; a donation is optional and does not activate channels. Self-hosted servers without donation mode can limit free registrations to one channel; see [pricing](#pricing-and-billing). A signup confirmation is not proof that your stream or headset is connected.
 
 ### Step 3: Test before streaming
 
-On your manage page choose **Send test message**. Check the message appears in the selected Discord channel, then check notifications on Quest, then test again with the standalone game open. You can send this test even while waiting for payment, but live chat forwarding stays paused until payment. “Test sent” on the webpage does not prove delivery. If you see the channel message but no in-game notification, use troubleshooting; do not assume the game supports it.
+On your manage page choose **Send test message**. Check the message appears in the selected Discord channel, then check notifications on Quest, then test again with the standalone game open. No payment is needed in donation mode. “Test sent” on the webpage does not prove delivery. If you see the channel message but no in-game notification, use troubleshooting; do not assume the game supports it.
 
 After that, go live and ask another person to comment. Keep the registration active; the hosted server listens again when you go live. You do not need to leave the browser open or run a PC app. Avoid also connecting the same Discord webhook in the Windows app: that can duplicate posts.
 
@@ -102,17 +102,17 @@ Twitch and YouTube retain permanent channel IDs and automatically follow renamed
 
 ## Pricing and billing
 
-First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan (**$3 per month** or **$25 per year**). Founder slots are per registration/webhook and last forever; updating with the same webhook keeps that plan. Deleting a founder does not reopen a founder slot. The service also has a total capacity limit and can say it is full.
+With donation mode enabled (`DONATE_URL` set), the relay is free for every streamer and runs all your saved channels; it asks for [donations](https://buy.stripe.com/8x200kaXv3rQ5XmcV90x203) instead of charging. Donations are optional and do not change your plan. Anyone who subscribed earlier keeps that subscription until they cancel it (see below). The service still has a total capacity limit and can say it is full.
 
-On the free plan, the first filled channel runs (TikTok, then Twitch, then YouTube). You may save all three; your manage page marks extra channels **waiting for upgrade**. Founders and paid users run all saved channels.
+Self-hosted servers without `DONATE_URL` retain priced mode: the first 5 registrations are lifetime founders with all channels free; later free registrations run the first filled channel (TikTok, then Twitch, then YouTube). Extra channels are saved and marked **waiting for upgrade**; paid users run all saved channels ($3 per month or $25 per year). Founder slots are per registration/webhook; updating the same webhook keeps that plan, and deleting a founder does not reopen a slot.
 
 Free and founder relay registrations append `via LiveChat XR - livechat.deliciouswines.org` as one extra line on the first chat batch after a source connects, including reconnects. Later batches are unchanged; paid registrations have no tag. No extra Discord post is sent just for the tag.
 
-To run extra channels, use a plan link **on your private manage page** so Stripe can match payment to that connection. Once Stripe reports a paid checkout, all saved channels start without re-registration. Refresh the page after payment. Do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. These prices apply to the hosted relay; the open-source PC app stays ungated.
+Only in priced mode, use a plan link **on your private manage page** to run extra channels so Stripe can match payment to that connection. Once Stripe reports a paid checkout, all saved channels start without re-registration. Refresh the page after payment; do not pay again merely because activation is delayed. Payment is handled by Stripe; LiveChat XR keeps the subscription ID, not card details. The open-source PC app stays ungated.
 
 ### How to cancel
 
-On a paid registration's manage page, select **Manage billing or cancel**. Sign in to Stripe's portal using the email used at checkout and follow its cancellation steps. Check the portal's confirmation and effective end date; when Stripe reports the subscription ended, your first channel remains free and extra channels stay saved, waiting for upgrade. Founders are never downgraded. If the link is missing or the page is gone, use the billing link in your Stripe receipt or contact support without posting private links. **Stop and delete only stops chat and deletes registration; it does not cancel billing.** Cancel billing first, then use Stop and delete if you also want your data removed.
+On a paid registration's manage page, select **Manage billing or cancel**. Sign in to Stripe's portal using the email used at checkout and follow its cancellation steps. Check the portal's confirmation and effective end date. When Stripe reports the subscription ended, all saved channels keep running free in donation mode; only in priced mode does the first channel remain free with extra channels saved, waiting for upgrade. Founders are never downgraded. If the link is missing or the page is gone, use the billing link in your Stripe receipt or contact support without posting private links. **Stop and delete only stops chat and deletes registration; it does not cancel billing.** Cancel billing first, then use Stop and delete if you also want your data removed.
 
 ### Privacy
 

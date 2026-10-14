@@ -78,6 +78,7 @@ Environment is read at import/startup. Restart after configuration changes. No s
 | MAX_REGS | `50` | Hard ceiling including founder, free and paid registrations |
 | FREE_SLOTS | `5` | Lifetime founder slots; later users get one channel free |
 | PUBLIC_URL | empty | Public origin for manage links and Discord callback; trailing slash stripped |
+| DONATE_URL | empty | Set = free for everyone (all channels) and the pages ask for donations at this URL |
 | PAY_MONTHLY | empty | Monthly Stripe Payment Link |
 | PAY_YEARLY | empty | Yearly Stripe Payment Link |
 | BILLING_URL | empty | Stripe customer-portal login URL |
@@ -88,7 +89,7 @@ Environment is read at import/startup. Restart after configuration changes. No s
 | TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET | empty | Helix app credentials for permanent user ID → current login; missing credentials retain anonymous IRC and one-time missing-handle alerts |
 | GA_ID | empty | Enables GA4 on public home/privacy/manage pages |
 
-First 5 streamers: everything free. After that: 1 channel free, multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
+With `DONATE_URL` set, everyone runs all channels free and pages show a donate link. Without it: first 5 streamers everything free, then 1 channel free and multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
 
 ## Relay HTTP interface
 
