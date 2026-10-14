@@ -40,6 +40,36 @@ class Account(unittest.TestCase):
             server.DISCORD_ID, server.PUBLIC_URL = "", ""
         self.assertNotIn("No Discord server yet?", urllib.request.urlopen(self.base + "/").read().decode())
 
+    def resignup(self, guilds):
+        """Sign up twice for the same Twitch channel (different case) with two webhooks in the given servers."""
+        hooks = [HOOK, HOOK[:-1] + "b"]
+        info = {h: {"name": "D", "guild_id": g, "channel_id": "c" + str(i)} for i, (h, g) in enumerate(zip(hooks, guilds))}
+        posts = []
+        with mock.patch.object(server, "check_webhook", side_effect=lambda url: info[url]),                 mock.patch.object(chat, "post_discord", side_effect=lambda url, text, **kw: posts.append((url, text)) or True):
+            self.post("/register", name="Lola", email="lola@example.com", twitch="Lola_Rulay", webhook=hooks[0])
+            first = dict(next(iter(server.regs.values())))
+            code, headers, _ = self.post("/register", name="Lola", email="lola@example.com", twitch="lola_rulay", webhook=hooks[1])
+        return hooks, first, headers, posts
+
+    def test_resignup_in_same_discord_server_replaces_the_earlier_relay(self):
+        # 2026-10-14: a streamer re-signed up twice and ran three relays, one posting where she couldn't see it.
+        hooks, first, headers, posts = self.resignup(["g1", "g1"])
+        (token, r), = server.regs.items()
+        self.assertEqual((r["webhook"], r["channel_id"], r["plan"], r["created"]), (hooks[1], "c1", first["plan"], first["created"]))
+        self.assertIn("&moved=1", headers["Location"])
+        self.assertTrue(any(url == hooks[0] and "moved to another channel" in text for url, text in posts))
+        self.assertFalse(any("moved" in text and token in text for _, text in posts), "the moved notice never carries the private link")
+        page = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
+        self.assertIn("nothing is duplicated", page)
+        self.assertIn('href="https://discord.com/channels/g1/c1"', page)
+
+    def test_resignup_in_another_discord_server_never_takes_over(self):
+        # Matching by handle alone would let anyone redirect a streamer's chat from their own server.
+        hooks, first, headers, posts = self.resignup(["g1", "g2"])
+        self.assertEqual(sorted(r["webhook"] for r in server.regs.values()), sorted(hooks))
+        self.assertNotIn("moved=1", headers["Location"])
+        self.assertFalse(any("moved to another channel" in text for _, text in posts))
+
     def test_edit_preserves_entitlements_and_revalidates_new_webhook(self):
         token = self.register()
         for plan in ("founder", "paid", "free"):
@@ -47,7 +77,7 @@ class Account(unittest.TestCase):
             r.update(plan=plan, subscription="sub_test", created=123)
             before_founders = set(server.founders)
             new_hook = HOOK[:-1] + "b"
-            with mock.patch.object(server, "check_webhook", return_value="New Discord") as check:
+            with mock.patch.object(server, "check_webhook", return_value={"name": "New Discord"}) as check:
                 code, headers, _ = self.post(f"/m/{token}/save", name="New", email="new@example.com",
                                              youtube="@newname", webhook=new_hook)
             self.assertEqual(code, 303)
@@ -85,7 +115,7 @@ class Account(unittest.TestCase):
         self.assertTrue(server.regs[token]["platform_icons"])
         self.assertIn('name="platform_icons" value="1" checked', urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
         form = dict(name="Ann", email="ann@example.com", twitch="someone", icons_form="1")
-        with mock.patch.object(server, "check_webhook", return_value="Discord"):
+        with mock.patch.object(server, "check_webhook", return_value={"name": "Discord"}):
             self.assertEqual(self.post(f"/m/{token}/save", **form)[0], 303)  # unchecked box: field absent
             self.assertFalse(server.regs[token]["platform_icons"])
             self.assertNotIn('value="1" checked', urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
@@ -96,7 +126,7 @@ class Account(unittest.TestCase):
         token = self.register()
         before = dict(server.regs[token])
         for hook, error in (("https://evil.test", None), (HOOK, ValueError("rejected"))):
-            with mock.patch.object(server, "check_webhook", side_effect=error, return_value="Discord"):
+            with mock.patch.object(server, "check_webhook", side_effect=error, return_value={"name": "Discord"}):
                 form = dict(name="Ann", email="ann@example.com", twitch="someone", webhook=hook)
                 a = self.post("/register", **form)
                 b = self.post(f"/m/{token}/save", **form)
@@ -115,7 +145,7 @@ class Account(unittest.TestCase):
         body = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
         self.assertNotIn(HOOK, body)
         self.assertIn("Changing your Discord username needs no action", body)
-        with mock.patch.object(server, "check_webhook", return_value="Discord") as check:
+        with mock.patch.object(server, "check_webhook", return_value={"name": "Discord"}) as check:
             self.assertEqual(self.post(f"/m/{token}/save", name="Ann", email="ann@example.com", twitch="someone")[0], 303)
         check.assert_called_once_with(HOOK)
 

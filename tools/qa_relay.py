@@ -31,7 +31,7 @@ def check_channel(platform, channel):
 def check_webhook(url):
     if url not in HOOKS.values():
         raise ValueError("use fixture-one or fixture-two")
-    return "QA simulated Discord"
+    return {"name": "QA simulated Discord"}
 
 
 def start(token, delay=0):
