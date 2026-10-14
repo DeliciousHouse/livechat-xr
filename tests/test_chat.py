@@ -94,7 +94,9 @@ class Twitch(unittest.TestCase):
 
 
 class TikTok(unittest.TestCase):
-    def test_missing_user_backs_off_and_resets_after_offline_or_error(self):
+    def test_missing_user_retries_every_minute_with_a_lowercase_handle(self):
+        # "Not found" also means "never gone LIVE": a first-time streamer must be picked up within a minute.
+        # TikTok's LIVE lookup only matches lowercase handles (2026-10-14: "@lola_Rulay" was live but "not found").
         from TikTokLive.client.errors import UserNotFoundError, UserOfflineError
         missing = UserNotFoundError("me", "missing")
         outcomes = [missing] * 6 + [UserOfflineError("offline"), missing, OSError("outage"), missing]
@@ -107,12 +109,13 @@ class TikTok(unittest.TestCase):
             if len(sleeps) == len(outcomes):
                 raise asyncio.CancelledError
 
-        with mock.patch("TikTokLive.TikTokLiveClient", return_value=client), mock.patch("asyncio.sleep", sleep):
+        with mock.patch("TikTokLive.TikTokLiveClient", return_value=client) as make, mock.patch("asyncio.sleep", sleep):
             with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(chat.tiktok("@me", lambda s: None, statuses.append))
-        self.assertEqual(sleeps, [60, 60, 60, 60, 1800, 1800, 60, 60, 60, 60])
+                asyncio.run(chat.tiktok("@Me_Mixed", lambda s: None, statuses.append))
+        self.assertEqual({c.kwargs["unique_id"] for c in make.call_args_list}, {"me_mixed"})
+        self.assertEqual(sleeps, [60] * len(outcomes))
         self.assertIn("Check the spelling or permission to go LIVE", statuses[4])
-        self.assertIn("30 minutes", statuses[4])
+        self.assertIn("retrying in 1 minute", statuses[5])
 
     def test_gifts_and_comments(self):
         """Fake TikTokLiveClient that replays events through the handlers chat.tiktok registers."""

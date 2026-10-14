@@ -45,7 +45,7 @@ A user can replace a leaked Discord webhook in their own channel. A new webhook 
 
 ## Escalation
 
-If health works but connection status does not, start with provider LIVE availability, the actual account handle, webhook validity, signing-service limits and payment state. The shared TikTok retry loop backs off to 30 minutes after five missing-user failures. Do not restart repeatedly just to defeat it. Discord chat posts use an ordered in-memory queue with automatic retries and a 25-attempt/minute budget. Only unsent backlog older than 60 seconds is collapsed; `dropped_backlog` counts its original lines. Restarting does not flush or preserve that queue.
+If health works but connection status does not, start with provider LIVE availability, the actual account handle, webhook validity, signing-service limits and payment state. The shared TikTok retry loop retries a missing user every minute, because TikTok also reports "not found" for accounts that have never gone LIVE. Handles are lowercased before lookup; TikTok's LIVE lookup does not match mixed case. Discord chat posts use an ordered in-memory queue with automatic retries and a 25-attempt/minute budget. Only unsent backlog older than 60 seconds is collapsed; `dropped_backlog` counts its original lines. Restarting does not flush or preserve that queue.
 
 Report sanitized status, affected component, first observed failure and deployment revision when known. Do not dump the data volume or admin user table. Use the canonical rollback procedure only after deciding whether image failure or data corruption is the actual cause.
 

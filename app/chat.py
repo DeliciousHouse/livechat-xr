@@ -466,7 +466,7 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
     from TikTokLive.client.errors import UserNotFoundError
     from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, GiftEvent, RoomUserSeqEvent
 
-    user = user.lstrip("@")
+    user = user.lstrip("@").lower()  # TikTok handles are case-insensitive, but the LIVE lookup only matches lowercase
     identity = identity if identity is not None else {}
     missing = 0
     if sign_api_key:
@@ -546,9 +546,8 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         except Exception as e:
             missing = missing + 1 if isinstance(e, UserNotFoundError) else 0
             if missing:
-                retry = 1800 if missing >= 5 else 60
-                status(f"TikTok: can't find @{user}. Check the spelling or permission to go LIVE; "
-                       f"retrying in {'30 minutes' if retry == 1800 else '1 minute'}.")
+                # "Not found" also means "never gone LIVE", so a first-time streamer must be picked up within a minute.
+                status(f"TikTok: can't find @{user}. Check the spelling or permission to go LIVE; retrying in 1 minute.")
             offline = "offline" in type(e).__name__.lower()
             if not missing:
                 status(f"TikTok: waiting for @{user} to go live" if offline else f"TikTok: retrying ({getattr(e, 'code', 0) or type(e).__name__})")

@@ -122,7 +122,7 @@ Read the hosted [Privacy page](https://livechat.deliciouswines.org/privacy). The
 
 | Problem | Try this |
 |---|---|
-| Wrong TikTok name / cannot find account | Copy the actual handle, not nickname. Correct it as above. Repeated not-found results back off to 30 minutes after five failures; LIVE permission can also be the cause |
+| Wrong TikTok name / cannot find account | Copy the actual handle, not nickname. Correct it as above. The relay retries every minute, so a first stream is picked up within a minute. Capital letters don't matter. LIVE permission can also be the cause |
 | Not live yet / waiting | That is normal. Go live on TikTok, then have another person comment. Twitch may connect before any comments arrive |
 | Stream connected but no chat | Your own normal comments are skipped. Wait a batch window (seven seconds by default), use another viewer, check selected channel and payment status |
 | No Discord message | Confirm the webhook points to the right text channel and has not been deleted. Send a manage/app test and look in the actual channel. Chat retries temporary Discord failures automatically; the account status shows delivered, queued and collapsed messages. Only unsent backlog older than 60 seconds is collapsed |
