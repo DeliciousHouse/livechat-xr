@@ -21,6 +21,25 @@ class Account(unittest.TestCase):
         self.post("/register", name="Ann", email="ann@example.com", twitch="someone", webhook=HOOK, **fields)
         return next(iter(server.regs))
 
+    def test_quest_checklist_opens_after_sign_up_then_collapses(self):
+        token = self.register()
+        first = urllib.request.urlopen(f"{self.base}/m/{token}?new=email").read().decode()
+        self.assertIn('<details class="box" open><summary><b>Last step: make chat pop up on your Quest</b>', first)
+        self.assertIn("All Messages", first)
+        self.assertIn(f'action="/m/{token}/test"', first)
+        later = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
+        self.assertIn('<details class="box"><summary><b>Quest pop-up checklist</b>', later)
+
+    def test_one_click_shows_create_server_hint(self):
+        server.DISCORD_ID, server.PUBLIC_URL = "123", "https://relay.example"
+        try:
+            home = urllib.request.urlopen(self.base + "/").read().decode()
+            self.assertIn("No Discord server yet?", home)
+            self.assertLess(home.index("No Discord server yet?"), home.index('value="discord"'))  # read before the button
+        finally:
+            server.DISCORD_ID, server.PUBLIC_URL = "", ""
+        self.assertNotIn("No Discord server yet?", urllib.request.urlopen(self.base + "/").read().decode())
+
     def test_edit_preserves_entitlements_and_revalidates_new_webhook(self):
         token = self.register()
         for plan in ("founder", "paid", "free"):
