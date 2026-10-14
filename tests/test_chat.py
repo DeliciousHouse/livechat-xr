@@ -1,4 +1,5 @@
 import asyncio
+import io
 import json
 import sys
 import tempfile
@@ -161,7 +162,7 @@ class TikTok(unittest.TestCase):
 
 class Relay(unittest.TestCase):
     def test_runner_tag_on_each_connection_and_opt_out(self):
-        async def source(channel, emit, status, key="", ask=None):
+        async def source(channel, emit, status, key="", ask=None, **_):
             status(f"{platform}: connected to qa")
             status(f"{platform}: connected to qa")  # not another connection
             emit(chat.ASK + "follow me")
@@ -174,7 +175,8 @@ class Relay(unittest.TestCase):
         for platform, enabled in [(p, e) for p in chat.PLATFORMS for e in (True, False)]:
             with self.subTest(platform=platform, enabled=enabled), tempfile.TemporaryDirectory() as d, \
                     mock.patch.object(chat, "DIR", Path(d)), mock.patch.object(chat, platform, source), \
-                    mock.patch.object(chat, "write_banner") as banner, mock.patch.object(chat, "post_discord") as discord:
+                    mock.patch.object(chat, "write_banner") as banner, mock.patch.object(chat, "post_discord") as discord, \
+                    mock.patch.object(chat, "viewer_count", return_value=None):
                 cfg = chat.load_config()
                 self.assertTrue(cfg.getboolean("chat", "show_tag"))
                 cfg["chat"][platform], cfg["chat"]["show_tag"] = "qa", str(enabled)
@@ -189,7 +191,7 @@ class Relay(unittest.TestCase):
                         await task
 
                 asyncio.run(go())
-                texts = [c.args[0] for c in banner.call_args_list]
+                texts = [c.args[0] for c in banner.call_args_list if len(c.args) == 1]  # banner.txt only
                 intro = "LiveChat XR - livechat.deliciouswines.org"
                 self.assertEqual(texts, [intro, "» follow me  - LiveChat XR\n" + chat.ICONS[platform] + "Fan: hi", intro] if enabled
                                  else ["» follow me\nFan: hi"])
@@ -538,7 +540,7 @@ class FollowAsk(unittest.TestCase):
     def test_relay_and_runner_pass_follow_ask_to_tiktok(self):
         seen = []
 
-        async def fake_tiktok(user, emit, status, key="", ask=None):
+        async def fake_tiktok(user, emit, status, key="", ask=None, **_):
             seen.append(ask)
             raise RuntimeError("stop")
 
@@ -548,6 +550,76 @@ class FollowAsk(unittest.TestCase):
         with mock.patch.object(chat, "tiktok", fake_tiktok), self.assertRaises(RuntimeError):
             asyncio.run(chat.Runner()._main(cfg))
         self.assertEqual(seen, [self.ASK])  # default from DEFAULTS
+
+
+class Viewers(unittest.TestCase):
+    def test_lines_list_live_platforms_for_the_layer(self):
+        self.assertEqual(chat.viewer_lines({}), "")
+        self.assertEqual(chat.viewer_lines({"twitch": None, "youtube": None}), "")
+        self.assertEqual(chat.viewer_lines({"youtube": 2, "twitch": 1, "tiktok": 4}), "tiktok 4\ntwitch 1\nyoutube 2")
+        self.assertEqual(chat.viewer_lines({"twitch": 0, "youtube": None}), "twitch 0")
+
+    def test_twitch_and_youtube_counts(self):
+        def gql(stream):
+            return mock.MagicMock(**{"__enter__.return_value": io.BytesIO(json.dumps(
+                {"data": {"user": {"stream": stream}}}).encode())})
+        with mock.patch("urllib.request.urlopen", return_value=gql({"viewersCount": 12})) as open_:
+            self.assertEqual(chat.viewer_count("twitch", "#CrossEyed"), 12)
+        req = open_.call_args.args[0]
+        self.assertEqual(json.loads(req.data)["variables"], {"l": "crosseyed"})
+        with mock.patch("urllib.request.urlopen", return_value=gql(None)):
+            self.assertIsNone(chat.viewer_count("twitch", "x"))
+        live = '"isLiveNow":true x "originalViewCount":"6055"'
+        with mock.patch.object(chat, "_yt_get", return_value=live) as get:
+            self.assertEqual(chat.viewer_count("youtube", "@me"), 6055)
+        get.assert_called_once_with("https://www.youtube.com/@me/live")
+        with mock.patch.object(chat, "_yt_get", return_value='"originalViewCount":"40"'):  # a VOD page, not live
+            self.assertIsNone(chat.viewer_count("youtube", "me"))
+
+    def test_runner_writes_viewers_file_and_leaves_the_banner_to_chat(self):
+        async def fake_tiktok(user, emit, status, key="", ask=None, *, on_viewers=None, **_):
+            on_viewers(5)
+            emit("Tk: hi")
+            await asyncio.Event().wait()
+
+        async def fake_twitch(channel, emit, status, **_):
+            await asyncio.Event().wait()
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(chat, "DIR", Path(d)):
+            cfg = chat.load_config()
+        cfg["chat"].update(tiktok="me", twitch="me", show_tag="false", platform_icons="false")
+        cfg["banner"]["seconds"] = "0.05"
+
+        async def go():
+            task = asyncio.create_task(chat.Runner()._main(cfg))
+            await asyncio.sleep(0.4)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        with mock.patch.object(chat, "tiktok", fake_tiktok), mock.patch.object(chat, "twitch", fake_twitch), \
+                mock.patch.object(chat, "viewer_count", return_value=3), mock.patch.object(chat, "VIEWERS_EVERY", 0.05), \
+                mock.patch.object(chat, "write_banner") as banner:
+            asyncio.run(go())
+        calls = [c.args for c in banner.call_args_list]
+        self.assertEqual([c for c in calls if len(c) == 1], [("Tk: hi",)])  # banner: chat only
+        viewers = [c[0] for c in calls if c[1:] == ("viewers.txt",)]
+        self.assertIn("tiktok 5\ntwitch 3", viewers)
+        self.assertGreater(viewers.count("tiktok 5\ntwitch 3"), 2)  # rewritten so the layer keeps showing it
+        self.assertEqual(viewers[-1], "")  # stopping hides the box at once
+
+        cfg["chat"]["viewer_count"] = "false"
+        seen = []
+
+        async def plain_tiktok(user, emit, status, key="", ask=None, **kw):
+            seen.append(kw.get("on_viewers"))
+            emit("Tk: hi")
+            await asyncio.Event().wait()
+
+        with mock.patch.object(chat, "tiktok", plain_tiktok), mock.patch.object(chat, "twitch", fake_twitch), \
+                mock.patch.object(chat, "viewer_count") as count, mock.patch.object(chat, "write_banner") as banner:
+            asyncio.run(go())
+        count.assert_not_called()
+        self.assertEqual((seen, [c.args for c in banner.call_args_list]), ([None], [("Tk: hi",)]))
 
 
 class Discord(unittest.TestCase):

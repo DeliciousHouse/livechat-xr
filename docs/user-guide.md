@@ -41,6 +41,8 @@ Next, go live on your chosen platform and have someone else post a comment. Your
 
 **Platform emoji on each message** is on by default (`[chat] platform_icons = true`). Each chat line, in the banner and in Discord, starts with 🎵 for TikTok, 🟣 for Twitch or ▶️ for YouTube. Uncheck it in Settings and Save to turn it off. Hosted relay users have the same checkbox on their manage page.
 
+**Live viewer count (top-right corner)** is on by default in the PC app (`[chat] viewer_count = true`). While any of your channels is live, a small box stays in the top-right of your view: `16 watching`, then each live platform's logo (TikTok note, Twitch bubble, YouTube play button) with its count. The box is only as wide as its text. Counts refresh every 30 seconds for Twitch and YouTube; TikTok sends its own updates. A platform that is offline, or whose count can't be read, is left out; with nothing live the box is hidden. Move or resize it with `[viewers] up`, `right` (the box's right edge), `distance` and `width` in metres; like the banner, placement applies the next time the game starts. Not available on the hosted Discord relay.
+
 ### What you set up
 
 The app reads stream chat; the VR layer draws it inside the chosen PC game. Restart the game after changing Games, placement or duration. Keep the tray app running. **Quit** stops new chat updates. To remove the layer, uninstall LiveChat XR through Windows Apps. Only use it with games that permit third-party OpenXR overlays; anti-cheat compatibility is not guaranteed.

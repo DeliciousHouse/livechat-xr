@@ -53,6 +53,28 @@ class Layer(unittest.TestCase):
                 if text and "🎁" not in text:
                     self.assertTrue(any(min(p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF) > 240 for p in buf))
 
+    def test_viewer_box_hugs_the_right_and_draws_platform_logos(self):
+        VW, VH = 1024, 96
+        rgb = lambda p: (p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF)
+
+        def draw(text):
+            buf = (C.c_uint32 * (VW * VH))()
+            self.dll.livechatxr_viewers_test(text.encode(), buf)
+            return buf
+
+        self.assertFalse(any(draw("")), "no live platform: nothing drawn")
+        buf = draw("tiktok 12\ntwitch 3\nyoutube 1")
+        mid = buf[VH // 2 * VW:(VH // 2 + 1) * VW]
+        self.assertEqual(mid[0] >> 24, 0, "left of the box is transparent")
+        self.assertGreater(mid[-1] >> 24, 200, "box reaches the right edge")
+        colors = list(map(rgb, (p for p in buf if p >> 24 > 200)))
+        self.assertTrue(any(r > 200 and g < 60 and b < 60 for r, g, b in colors), "YouTube red")
+        self.assertTrue(any(100 < r < 190 and g < 110 and b > 200 for r, g, b in colors), "Twitch purple")
+        self.assertTrue(any(r < 120 and g > 200 and b > 200 for r, g, b in colors), "TikTok cyan")
+        one = draw("twitch 1")
+        width = lambda b: sum(1 for p in b[VH // 2 * VW:(VH // 2 + 1) * VW] if p >> 24)
+        self.assertLess(width(one), width(buf), "the box shrinks to its text")
+
     def test_raster(self):
         buf = (C.c_uint32 * (W * H))()
         self.dll.livechatxr_render_test("🎁 BigFan sent Galaxy x3\nViewer One: nice shot!\nSecondPerson: what gun is that 🔫".encode(), buf)
