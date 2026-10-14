@@ -213,6 +213,22 @@ class Account(unittest.TestCase):
         body = urllib.request.urlopen(f"{self.base}/m/{token}").read().decode()
         self.assertIn("214 of 220 chat messages delivered; 4 queued; 2 older messages collapsed.", body)
 
+    def test_relay_log_is_a_post_timeline_without_chat_text(self):
+        token = self.register()
+
+        async def relay(*args, on_lines=None, **kwargs):
+            on_lines(["Ann: secret words", "Bob: more secret words"], ["tiktok"])
+            await asyncio.sleep(0.2)  # the queue worker posts in the same loop
+            raise asyncio.CancelledError
+
+        with mock.patch.object(chat, "relay", relay), mock.patch.object(chat, "post_discord", lambda *a, **k: True), \
+                self.assertLogs("relay", "INFO") as cm:
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(server.run(token))
+        timeline = [line.rsplit(": ", 1)[1] for line in cm.output if "lines" in line]
+        self.assertEqual(timeline, ["2 lines queued", "posted 2 lines"])
+        self.assertFalse(any("secret" in line for line in cm.output), "chat text must not be logged")
+
     def test_webhook_collision_and_stale_identity_cannot_overwrite_account(self):
         token = self.register()
         old = server.regs[token]

@@ -406,8 +406,14 @@ async def run(token: str, delay: float = 0) -> None:
         for key, n in (("lines_received", received), ("lines_posted", posted),
                        ("lines_dropped", dropped_backlog), ("dropped_backlog", dropped_backlog)):
             st[key] = st.get(key, 0) + n
+        # One line per window and per post, counts only (never chat text): the relay log is the post timeline.
+        if received:
+            log.info("%s: %d lines queued", channel_label(r), received)
+        if dropped_backlog:
+            log.info("%s: %d lines collapsed", channel_label(r), dropped_backlog)
         if ok is None:
             return
+        log.info("%s: %s", channel_label(r), f"posted {posted} lines" if ok else f"post failed ({error or '?'})")
         key = "posts" if ok else "fails"
         st[key] = st.get(key, 0) + 1
         if ok:
