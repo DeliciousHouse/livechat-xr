@@ -1003,9 +1003,10 @@ class Handler(BaseHTTPRequestHandler):
                     save()
             if token:
                 start(token)
-                chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended. Your first channel stays free; "
-                                                          "extra channels are saved, waiting for upgrade. "
-                                                          f"Renew here: <{manage_url(token)}>")
+                message = ("All your saved channels stay free." if DONATE_URL else
+                           "Your first channel stays free; extra channels are saved, waiting for upgrade. "
+                           f"Renew here: <{manage_url(token)}>")
+                chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended. " + message)
         self.send(200, b"ok")
 
     def recover(self, form: dict) -> None:

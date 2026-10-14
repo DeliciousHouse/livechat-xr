@@ -302,6 +302,23 @@ class Server(unittest.TestCase):
         finally:
             server.FREE_SLOTS, server.STRIPE_SECRET, server.PAY_MONTHLY = 5, "", ""
 
+    def test_donation_checkout_ignored_and_cancellation_keeps_all_channels(self):
+        self.post("/register", name="Ann", email="ann@example.com", tiktok="ann1", twitch="someone", webhook=HOOK)
+        token = next(iter(server.regs))
+        server.regs[token].update(plan="paid", subscription="sub_test")
+        with mock.patch.object(server, "DONATE_URL", "https://buy.stripe.com/donate"), \
+                mock.patch.object(server, "STRIPE_SECRET", "whsec_test"):
+            before = dict(server.regs[token])
+            self.assertEqual(self.webhook_event({"type": "checkout.session.completed", "data": {"object": {
+                "payment_status": "paid"}}}), 200)
+            self.assertEqual(server.regs[token], before)
+            self.assertEqual(self.webhook_event({"type": "customer.subscription.deleted", "data": {"object": {
+                "id": "sub_test"}}}), 200)
+            self.assertEqual(server.plan(server.regs[token]), "free")
+            self.assertEqual(len(self.live_channels(token)), 2)
+            self.assertIn("All your saved channels stay free", self.posts[-1][1])
+            self.assertNotIn("waiting for upgrade", self.posts[-1][1])
+
     def live_channels(self, token):
         relay = mock.AsyncMock(side_effect=asyncio.CancelledError)
         with mock.patch.object(chat, "relay", relay):
