@@ -462,6 +462,19 @@ class Server(unittest.TestCase):
         finally:
             server.DISCORD_ID, server.PUBLIC_URL = "", ""
 
+    def test_discord_one_click_hidden_without_public_url(self):
+        # A relative redirect_uri makes Discord answer "Not a well formed URL" (2026-10-14 sign-up failure).
+        server.DISCORD_ID, server.PUBLIC_URL = "123", ""
+        try:
+            self.assertNotIn(b'value="discord"', urllib.request.urlopen(self.base + "/").read())  # no one-click button
+            code, headers, body = self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1",
+                                            via="discord")
+            self.assertNotIn("discord.com/oauth2", headers.get("Location") or "")
+            self.assertIn("It should start with https://discord.com/api/webhooks/", body)  # falls back to the paste-a-webhook path
+            self.assertEqual(server.regs, {})
+        finally:
+            server.DISCORD_ID, server.PUBLIC_URL = "", ""
+
     def test_log_and_stats_survive_restart(self):
         (server.DATA / "relay.log").write_text("1791370000.5\tWARNING\tlivechatxr\tdiscord post failed: 429\nnot a log line\n",
                                                encoding="utf-8")
