@@ -707,7 +707,7 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
     if form.get("platform") in LABEL and form.get("channel"):  # older single-platform form
         chans[form["platform"]] = form["channel"]
     values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "webhook")} | {p: html.escape(c) for p, c in chans.items()}
-    if DISCORD_ID:
+    if DISCORD_ID and PUBLIC_URL:  # Discord rejects a relative redirect_uri ("Not a well formed URL")
         discord = ('<p class="hint">No Discord server yet? Discord only lists servers you own or manage. '
                    '<a href="https://discord.com/channels/@me" target="_blank" rel="noopener">Open Discord</a>, tap <b>+</b> → '
                    '<b>Create My Own</b>, add a channel like <code>#stream-chat</code>, then come back here.</p>'
@@ -1084,7 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
                 return fail(f"We can't find that {LABEL[p]} account. Check the spelling, without the @")
             if exists is None:
                 channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
-        if not edit_token and form.get("via") == "discord" and DISCORD_ID:
+        if not edit_token and form.get("via") == "discord" and DISCORD_ID and PUBLIC_URL:
             state = secrets.token_urlsafe(24)
             with lock:
                 oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "signin")} | wanted)
@@ -1158,6 +1158,8 @@ def main() -> None:
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log.info("listening on :%d with %d registrations", PORT, len(regs))
+    if DISCORD_ID and not PUBLIC_URL:
+        log.error("DISCORD_CLIENT_ID is set but PUBLIC_URL is empty: Connect Discord is hidden until PUBLIC_URL is in the env file")
     loop.run_forever()
 
 
