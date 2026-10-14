@@ -665,7 +665,7 @@ posted in your Discord channel). That removes your registration right away. Back
 Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
 <p><a href="/">Back</a></p>"""
 
-MANAGE = """<h1>Your relay account</h1>{msg}
+MANAGE = """<h1>Your relay account</h1>{msg}{checklist}
 <section class="box" aria-labelledby="relay-status"><h2 id="relay-status">Channel status</h2>{channels}
 <div class="channel-row"><b>Discord:</b> webhook “{dname}”
 <div class="hint">Use Send test message to check delivery.</div>
@@ -683,6 +683,16 @@ No email, webhook, private link or chat messages are included.</p>
 <p class="hint">Deleting your relay does not cancel a paid subscription. Use Manage billing first.</p>
 <p><a href="/">Set up another channel</a></p>"""
 
+# Shown open right after sign-up, collapsed afterwards. Mirrors the user guide's Quest troubleshooting row.
+QUEST_CHECKLIST = """<details class="box"{open}><summary><b>{title}</b></summary><ol>
+<li>Install Discord from the Meta Horizon Store on your Quest and sign in with this same Discord account.</li>
+<li>In Discord, open the server and channel you connected. Set the channel's notifications to <b>All Messages</b>,
+and check that neither the channel nor the server is muted.</li>
+<li>In your Quest settings, allow notifications from Discord and turn off Do Not Disturb.</li>
+<li>Put your headset on and press <b>Send test message</b>. A Discord pop-up should appear within a few seconds.</li>
+<li>Open your game and send another test, so you know it shows up in-game before you go live.</li></ol>
+<form class="inline" method="post" action="/m/{token}/test"><button>Send test message</button></form></details>"""
+
 # Existing Dora controllers parse this hidden legacy status contract, not user-facing copy.
 PROBE_STATUS = '<div hidden aria-hidden="true"><b>Status:</b> {status}</div>'
 
@@ -697,8 +707,11 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
     if form.get("platform") in LABEL and form.get("channel"):  # older single-platform form
         chans[form["platform"]] = form["channel"]
     values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "webhook")} | {p: html.escape(c) for p, c in chans.items()}
-    if DISCORD_ID:
-        discord = ('<button class="cta" name="via" value="discord">Connect Discord</button><p class="hint">Discord asks which server '
+    if DISCORD_ID and PUBLIC_URL:  # Discord rejects a relative redirect_uri ("Not a well formed URL")
+        discord = ('<p class="hint">No Discord server yet? Discord only lists servers you own or manage. '
+                   '<a href="https://discord.com/channels/@me" target="_blank" rel="noopener">Open Discord</a>, tap <b>+</b> → '
+                   '<b>Create My Own</b>, add a channel like <code>#stream-chat</code>, then come back here.</p>'
+                   '<button class="cta" name="via" value="discord">Connect Discord</button><p class="hint">Discord asks which server '
                    'and channel to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</p>'
                    '<details><summary>or paste a webhook URL</summary>'
                    + WEBHOOK_FIELD.format(req="", webhook=values["webhook"])
@@ -896,6 +909,8 @@ class Handler(BaseHTTPRequestHandler):
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
         self.send(code, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
+            checklist=QUEST_CHECKLIST.format(token=token, open=" open" if new else "",
+                                             title="Last step: make chat pop up on your Quest" if new else "Quest pop-up checklist"),
             channels="".join(f'<div class="channel-row"><b>{LABEL[p]}:</b> {html.escape(c)}'
                              f'<div class="hint">{html.escape(channel_status(token, p))}</div></div>' for p, c in channels(r).items()),
             dname=html.escape(r["discord_channel"]),
@@ -1069,7 +1084,7 @@ class Handler(BaseHTTPRequestHandler):
                 return fail(f"We can't find that {LABEL[p]} account. Check the spelling, without the @")
             if exists is None:
                 channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
-        if not edit_token and form.get("via") == "discord" and DISCORD_ID:
+        if not edit_token and form.get("via") == "discord" and DISCORD_ID and PUBLIC_URL:
             state = secrets.token_urlsafe(24)
             with lock:
                 oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "signin")} | wanted)
@@ -1143,6 +1158,8 @@ def main() -> None:
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log.info("listening on :%d with %d registrations", PORT, len(regs))
+    if DISCORD_ID and not PUBLIC_URL:
+        log.error("DISCORD_CLIENT_ID is set but PUBLIC_URL is empty: Connect Discord is hidden until PUBLIC_URL is in the env file")
     loop.run_forever()
 
 
