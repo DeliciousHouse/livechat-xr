@@ -5,6 +5,9 @@
 //   config.ini  [games] exes=Game1.exe,Game2.exe   only these processes get the banner; all others pass through
 //               [banner] seconds, up, distance, width (metres)
 //   banner.txt  written by the LiveChat XR app; shown for `seconds` after each write
+//   viewers.txt "tiktok 4\ntwitch 1" live viewer counts, drawn as a small top-right box with platform logos;
+//               the app rewrites it every 5 s, so it hides 20 s after the app stops (or at once when empty)
+//               [viewers] up, right (box's right edge), distance, width (metres)
 //   overlay.log this layer's log
 // D3D11 sessions only. Any failure -> log, disable, pure pass-through for the rest of the process.
 // Kill switch: environment variable LIVECHATXR_DISABLE=1 (declared in the JSON manifest).
@@ -27,10 +30,12 @@
 #include <vector>
 
 static const int W = 1024, H = 320;  // banner texture
+static const int VW = 1024, VH = 96;  // viewer-count texture
 static ULONGLONG g_showMs = 7000;
 
-// Placement (metres, VIEW space); overridden by config.ini [banner].
+// Placement (metres, VIEW space); overridden by config.ini [banner] / [viewers].
 static float g_up = 0.22f, g_dist = 1.0f, g_width = 0.62f;
+static float g_vUp = 0.36f, g_vRight = 0.45f, g_vDist = 1.0f, g_vWidth = 0.44f;
 
 static std::wstring g_dir;  // %LOCALAPPDATA%\LiveChatXR
 static std::atomic<bool> g_active{false}, g_disabled{false};
@@ -66,9 +71,18 @@ NEXT_FNS(DECL)
 
 // ---------------------------------------------------------------- banner text -> pixels (worker thread)
 static std::mutex g_mx;
-static std::vector<uint32_t> g_pixels(W * H);  // RGBA (R in the low byte); swizzled at upload for BGRA swapchains
-static bool g_dirty = false, g_bgra = false;
-static ULONGLONG g_until = 0;                  // GetTickCount64 deadline
+static bool g_bgra = false;
+struct Pane {  // one overlay quad: pixels from a watcher thread + its swapchain in the session
+    int w, h;
+    std::vector<uint32_t> pixels;  // RGBA (R in the low byte); swizzled at upload for BGRA swapchains
+    bool dirty = false;
+    ULONGLONG until = 0;           // GetTickCount64 deadline
+    XrSwapchain sc = XR_NULL_HANDLE;
+    std::vector<XrSwapchainImageD3D11KHR> imgs;
+    bool hasImage = false;
+    Pane(int w_, int h_) : w(w_), h(h_), pixels(w_ * h_) {}
+};
+static Pane g_banner(W, H), g_viewers(VW, VH);
 
 // Lines starting with the gift emoji (U+1F381), optionally after a platform emoji, are drawn gold; everything else white.
 static const wchar_t GIFT[] = L"\xD83C\xDF81";
@@ -127,10 +141,127 @@ static void Rasterize(const std::wstring& text, std::vector<uint32_t>& out) {
     DeleteObject(bmp);
     DeleteDC(dc);
 }
-static void Watcher() {
-    std::wstring path = g_dir + L"\\banner.txt";
+// Viewer box: "N watching", then a logo + count per platform; right-aligned so it sits in the corner, with a dark
+// rounded box hugging the content. Drawn at 2x and box-filtered down so the GDI shapes come out antialiased.
+static int LogoWidth(const std::wstring& p, int s) { return p == L"youtube" ? s * 10 / 7 : s; }
+
+static void Logo(HDC dc, const std::wstring& p, int x, int y, int s, HFONT note) {
+    auto fill = [&](COLORREF c) {
+        SelectObject(dc, GetStockObject(DC_BRUSH));
+        SetDCBrushColor(dc, c);
+        SelectObject(dc, GetStockObject(NULL_PEN));
+    };
+    if (p == L"youtube") {  // red rounded rectangle, white play triangle
+        fill(RGB(255, 0, 0));
+        RoundRect(dc, x, y + s / 8, x + s * 10 / 7, y + s * 7 / 8, s / 3, s / 3);
+        fill(RGB(255, 255, 255));
+        POINT t[] = {{x + s * 4 / 7, y + s * 5 / 16}, {x + s * 4 / 7, y + s * 11 / 16}, {x + s * 13 / 14, y + s / 2}};
+        Polygon(dc, t, 3);
+    } else if (p == L"twitch") {  // purple speech bubble with two white bars
+        fill(RGB(145, 70, 255));
+        Rectangle(dc, x + s / 8, y, x + s, y + s * 3 / 4);
+        POINT t[] = {{x + s / 4, y + s * 3 / 4 - 1}, {x + s / 2, y + s * 3 / 4 - 1}, {x + s / 4, y + s}};
+        Polygon(dc, t, 3);
+        fill(RGB(255, 255, 255));
+        Rectangle(dc, x + s * 7 / 16, y + s / 6, x + s * 9 / 16, y + s * 7 / 16);
+        Rectangle(dc, x + s * 11 / 16, y + s / 6, x + s * 13 / 16, y + s * 7 / 16);
+    } else if (p == L"tiktok") {  // TikTok's look: cyan and pink offset copies of a note under a white one
+        HGDIOBJ old = SelectObject(dc, note);
+        int o = s / 14;
+        COLORREF cs[] = {RGB(37, 244, 238), RGB(254, 44, 85), RGB(255, 255, 255)};
+        int d[] = {-o, o, 0};
+        for (int i = 0; i < 3; ++i) {
+            RECT q{x + d[i], y + d[i], x + s + d[i], y + s + d[i]};
+            SetTextColor(dc, cs[i]);
+            DrawTextW(dc, L"\x266A", 1, &q, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+        SelectObject(dc, old);
+    }
+}
+
+static void RasterizeViewers(const std::wstring& text, std::vector<uint32_t>& out) {
+    struct Item { std::wstring platform, count; };
+    std::vector<Item> items;
+    long total = 0;
+    for (size_t start = 0; start < text.size();) {
+        size_t end = text.find(L'\n', start);
+        if (end == std::wstring::npos) end = text.size();
+        std::wstring line = text.substr(start, end - start);
+        start = end + 1;
+        size_t sp = line.find(L' ');
+        if (sp == std::wstring::npos) continue;
+        std::wstring count = line.substr(sp + 1);
+        while (!count.empty() && (count.back() == L'\r' || count.back() == L' ')) count.pop_back();
+        items.push_back({line.substr(0, sp), count});
+        total += _wtol(count.c_str());
+    }
+    std::fill(out.begin(), out.end(), 0u);
+    if (items.empty()) return;
+
+    const int S = 2, w = VW * S, h = VH * S;  // supersampled canvas
+    BITMAPINFO bi{};
+    bi.bmiHeader = {sizeof(BITMAPINFOHEADER), w, -h, 1, 32, BI_RGB};
+    void* bits = nullptr;
+    HDC dc = CreateCompatibleDC(nullptr);
+    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HGDIOBJ oldBmp = SelectObject(dc, bmp);
+    HFONT font = CreateFontW(-46 * S, 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, L"Segoe UI");
+    HFONT note = CreateFontW(-60 * S, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, ANTIALIASED_QUALITY, 0, L"Segoe UI Symbol");
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    const int pad = 18 * S, logo = 44 * S, gap = 8 * S, sep = 24 * S;
+    auto width = [&](const std::wstring& s) { SIZE z{}; GetTextExtentPoint32W(dc, s.c_str(), (int)s.size(), &z); return (int)z.cx; };
+    std::wstring head = std::to_wstring(total) + L" watching";
+    int content = width(head);
+    for (auto& it : items) content += sep + LogoWidth(it.platform, logo) + gap + width(it.count);
+    int boxL = w - (content + 2 * pad < w ? content + 2 * pad : w);
+    memset(bits, 0, (size_t)w * h * 4);
+    const COLORREF BOX = RGB(24, 24, 24);  // non-zero, so "inside the box" is any non-black pixel
+    SelectObject(dc, GetStockObject(DC_BRUSH));
+    SetDCBrushColor(dc, BOX);
+    SelectObject(dc, GetStockObject(NULL_PEN));
+    RoundRect(dc, boxL, 0, w + 1, h + 1, 28 * S, 28 * S);
+    TEXTMETRICW tm;
+    GetTextMetricsW(dc, &tm);
+    int x = boxL + pad, mid = h / 2, ty = mid - tm.tmHeight / 2;
+    SetTextColor(dc, RGB(255, 255, 255));
+    TextOutW(dc, x, ty, head.c_str(), (int)head.size());
+    x += width(head);
+    for (auto& it : items) {
+        x += sep;
+        Logo(dc, it.platform, x, mid - logo / 2, logo, note);
+        x += LogoWidth(it.platform, logo) + gap;
+        SetTextColor(dc, RGB(255, 255, 255));
+        TextOutW(dc, x, ty, it.count.c_str(), (int)it.count.size());
+        x += width(it.count);
+    }
+    GdiFlush();
+    // Average each 2x2 block; pixels outside the box are transparent and don't darken the edge colour.
+    const uint8_t* src = (const uint8_t*)bits;
+    for (int y = 0; y < VH; ++y)
+        for (int xx = 0; xx < VW; ++xx) {
+            uint32_t r = 0, g = 0, b = 0, in = 0;
+            for (int dy = 0; dy < S; ++dy)
+                for (int dx = 0; dx < S; ++dx) {
+                    const uint8_t* p = src + ((size_t)(y * S + dy) * w + xx * S + dx) * 4;  // BGRx
+                    if (p[0] | p[1] | p[2]) { b += p[0]; g += p[1]; r += p[2]; ++in; }
+                }
+            out[y * VW + xx] = in ? (r / in) | (g / in) << 8 | (b / in) << 16 | (235 * in / (S * S)) << 24 : 0;
+        }
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
+    DeleteObject(note);
+    SelectObject(dc, oldBmp);
+    DeleteObject(bmp);
+    DeleteDC(dc);
+}
+
+// Watches one file; each new write is rasterized and shown for showMs after its write time. Empty file = hide.
+static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs,
+                    void (*raster)(const std::wstring&, std::vector<uint32_t>&)) {
+    std::wstring path = g_dir + L"\\" + name;
     FILETIME last{};
-    std::vector<uint32_t> px(W * H);
+    std::vector<uint32_t> px(pane->w * pane->h);
     for (;;) {
         Sleep(200);
         WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -144,7 +275,11 @@ static void Watcher() {
         size_t n;
         while ((n = fread(buf, 1, sizeof buf, f)) > 0) u8.append(buf, n);
         fclose(f);
-        if (u8.empty()) continue;
+        if (u8.empty()) {
+            std::lock_guard<std::mutex> l(g_mx);
+            pane->until = 0;
+            continue;
+        }
         std::wstring text(MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), nullptr, 0), L'\0');
         MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), text.data(), (int)text.size());
         FILETIME nowFt;
@@ -152,12 +287,12 @@ static void Watcher() {
         ULONGLONG now = ((ULONGLONG)nowFt.dwHighDateTime << 32) | nowFt.dwLowDateTime;
         ULONGLONG mt = ((ULONGLONG)last.dwHighDateTime << 32) | last.dwLowDateTime;
         ULONGLONG ageMs = now > mt ? (now - mt) / 10000 : 0;
-        if (ageMs >= g_showMs) continue;  // stale file from before the game started
-        Rasterize(text, px);
+        if (ageMs >= showMs) continue;  // stale file from before the game started
+        raster(text, px);
         std::lock_guard<std::mutex> l(g_mx);
-        g_pixels.swap(px);
-        g_dirty = true;
-        g_until = GetTickCount64() + (g_showMs - ageMs);
+        pane->pixels.swap(px);
+        pane->dirty = true;
+        pane->until = GetTickCount64() + (showMs - ageMs);
     }
 }
 
@@ -166,14 +301,18 @@ struct Overlay {
     XrSession session = XR_NULL_HANDLE;
     ID3D11Device* dev = nullptr;
     XrSpace view = XR_NULL_HANDLE;
-    XrSwapchain sc = XR_NULL_HANDLE;
-    std::vector<XrSwapchainImageD3D11KHR> imgs;
     uint32_t maxLayers = 16;
-    bool hasImage = false;
 } S;
 
 static void Teardown() {
-    if (S.sc) n_xrDestroySwapchain(S.sc);
+    for (Pane* p : {&g_banner, &g_viewers}) {
+        if (p->sc) n_xrDestroySwapchain(p->sc);
+        p->sc = XR_NULL_HANDLE;
+        p->imgs.clear();
+        p->hasImage = false;
+        std::lock_guard<std::mutex> l(g_mx);
+        p->dirty = true;  // a new session re-uploads the current pixels
+    }
     if (S.view) n_xrDestroySpace(S.view);
     S = Overlay{};
 }
@@ -200,50 +339,52 @@ static bool Setup(XrSession session, XrSystemId sys, ID3D11Device* dev) {
     if (!fmt) return false;
     g_bgra = fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || fmt == DXGI_FORMAT_B8G8R8A8_UNORM;
 
-    XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-    ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-    ci.format = fmt;
-    ci.sampleCount = 1;
-    ci.width = W;
-    ci.height = H;
-    ci.faceCount = 1;
-    ci.arraySize = 1;
-    ci.mipCount = 1;
-    if (XR_FAILED(n_xrCreateSwapchain(session, &ci, &S.sc))) return false;
-    n_xrEnumerateSwapchainImages(S.sc, 0, &n, nullptr);
-    S.imgs.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
-    if (XR_FAILED(n_xrEnumerateSwapchainImages(S.sc, n, &n, (XrSwapchainImageBaseHeader*)S.imgs.data()))) return false;
+    for (Pane* p : {&g_banner, &g_viewers}) {
+        XrSwapchainCreateInfo ci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        ci.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        ci.format = fmt;
+        ci.sampleCount = 1;
+        ci.width = p->w;
+        ci.height = p->h;
+        ci.faceCount = 1;
+        ci.arraySize = 1;
+        ci.mipCount = 1;
+        if (XR_FAILED(n_xrCreateSwapchain(session, &ci, &p->sc))) return false;
+        n_xrEnumerateSwapchainImages(p->sc, 0, &n, nullptr);
+        p->imgs.assign(n, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+        if (XR_FAILED(n_xrEnumerateSwapchainImages(p->sc, n, &n, (XrSwapchainImageBaseHeader*)p->imgs.data()))) return false;
+    }
     Log("session ready: format %lld, %u images, maxLayers %u", (long long)fmt, n, S.maxLayers);
     return true;
 }
 
-static bool Upload() {  // render thread only
+static bool Upload(Pane& P) {  // render thread only
     uint32_t idx;
     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    if (XR_FAILED(n_xrAcquireSwapchainImage(S.sc, &ai, &idx))) return false;
+    if (XR_FAILED(n_xrAcquireSwapchainImage(P.sc, &ai, &idx))) return false;
     XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, 100000000};  // 100 ms
-    if (XR_FAILED(n_xrWaitSwapchainImage(S.sc, &wi))) return false;
+    if (XR_FAILED(n_xrWaitSwapchainImage(P.sc, &wi))) return false;
     ID3D11DeviceContext* ctx = nullptr;
     S.dev->GetImmediateContext(&ctx);
     {
         std::lock_guard<std::mutex> l(g_mx);
-        const uint32_t* px = g_pixels.data();
+        const uint32_t* px = P.pixels.data();
         std::vector<uint32_t> swz;
         if (g_bgra) {  // swap R and B
-            swz.resize(g_pixels.size());
+            swz.resize(P.pixels.size());
             for (size_t i = 0; i < swz.size(); ++i) {
-                uint32_t p = g_pixels[i];
+                uint32_t p = P.pixels[i];
                 swz[i] = (p & 0xFF00FF00) | (p & 0xFF) << 16 | (p >> 16 & 0xFF);
             }
             px = swz.data();
         }
-        ctx->UpdateSubresource(S.imgs[idx].texture, 0, nullptr, px, W * 4, 0);
-        g_dirty = false;
+        ctx->UpdateSubresource(P.imgs[idx].texture, 0, nullptr, px, P.w * 4, 0);
+        P.dirty = false;
     }
     ctx->Release();
     XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    if (XR_FAILED(n_xrReleaseSwapchainImage(S.sc, &ri))) return false;
-    S.hasImage = true;
+    if (XR_FAILED(n_xrReleaseSwapchainImage(P.sc, &ri))) return false;
+    P.hasImage = true;
     return true;
 }
 
@@ -268,32 +409,41 @@ static XrResult XRAPI_CALL h_xrDestroySession(XrSession s) {
 }
 
 static XrResult XRAPI_CALL h_xrEndFrame(XrSession s, const XrFrameEndInfo* info) {
-    if (g_disabled || s != S.session || !S.sc || !info) return n_xrEndFrame(s, info);
+    if (g_disabled || s != S.session || !g_banner.sc || !info) return n_xrEndFrame(s, info);
     try {
-        bool dirty, visible;
-        {
-            std::lock_guard<std::mutex> l(g_mx);
-            dirty = g_dirty;
-            visible = GetTickCount64() < g_until;
-        }
-        if (dirty && !Upload()) { Disable("swapchain upload failed"); return n_xrEndFrame(s, info); }
-        if (!visible || !S.hasImage || info->layerCount + 1 > S.maxLayers) return n_xrEndFrame(s, info);
-
-        XrCompositionLayerQuad q{XR_TYPE_COMPOSITION_LAYER_QUAD};
-        q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
-        q.space = S.view;
-        q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        q.subImage = {S.sc, {{0, 0}, {W, H}}, 0};
-        q.pose = {{0, 0, 0, 1}, {0, g_up, -g_dist}};
-        q.size = {g_width, g_width * H / W};
+        // banner centred at g_up; the viewer quad's right edge at g_vRight (its box is right-aligned in the texture)
+        struct { Pane* p; float x, y, d, w; } panes[] = {
+            {&g_banner, 0, g_up, g_dist, g_width},
+            {&g_viewers, g_vRight - g_vWidth / 2, g_vUp, g_vDist, g_vWidth}};
+        XrCompositionLayerQuad quads[2];
         std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
-        layers.push_back((const XrCompositionLayerBaseHeader*)&q);
+        for (int i = 0; i < 2; ++i) {
+            Pane& P = *panes[i].p;
+            bool dirty, visible;
+            {
+                std::lock_guard<std::mutex> l(g_mx);
+                dirty = P.dirty;
+                visible = GetTickCount64() < P.until;
+            }
+            if (dirty && !Upload(P)) { Disable("swapchain upload failed"); return n_xrEndFrame(s, info); }
+            if (!visible || !P.hasImage || layers.size() + 1 > S.maxLayers) continue;
+            XrCompositionLayerQuad& q = quads[i];
+            q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+            q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+            q.space = S.view;
+            q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            q.subImage = {P.sc, {{0, 0}, {P.w, P.h}}, 0};
+            q.pose = {{0, 0, 0, 1}, {panes[i].x, panes[i].y, -panes[i].d}};
+            q.size = {panes[i].w, panes[i].w * P.h / P.w};
+            layers.push_back((const XrCompositionLayerBaseHeader*)&q);
+        }
+        if (layers.size() == info->layerCount) return n_xrEndFrame(s, info);
         XrFrameEndInfo mine = *info;
         mine.layerCount = (uint32_t)layers.size();
         mine.layers = layers.data();
         XrResult r = n_xrEndFrame(s, &mine);
         if (XR_SUCCEEDED(r)) return r;
-        Log("xrEndFrame with banner returned %d", (int)r);
+        Log("xrEndFrame with overlay returned %d", (int)r);
         Disable("runtime rejected the banner layer");
     } catch (...) { Disable("exception in xrEndFrame"); }
     return n_xrEndFrame(s, info);
@@ -339,6 +489,16 @@ extern "C" __declspec(dllexport) void livechatxr_render_test(const char* u8, uin
     memcpy(out, px.data(), px.size() * 4);
 }
 
+// Self-test hook: rasterize viewers.txt content into a VW*VH RGBA buffer.
+extern "C" __declspec(dllexport) void livechatxr_viewers_test(const char* u8, uint32_t* out) {
+    std::wstring t(MultiByteToWideChar(CP_UTF8, 0, u8, -1, nullptr, 0), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, u8, -1, t.data(), (int)t.size());
+    while (!t.empty() && t.back() == L'\0') t.pop_back();
+    std::vector<uint32_t> px(VW * VH);
+    RasterizeViewers(t, px);
+    memcpy(out, px.data(), px.size() * 4);
+}
+
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerInterface(
     const XrNegotiateLoaderInfo* li, const char* /*layerName*/, XrNegotiateApiLayerRequest* req) {
     if (!li || !req || li->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
@@ -378,9 +538,15 @@ extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerIn
         if (GetPrivateProfileStringW(L"banner", L"distance", L"", v, 32, ini.c_str())) g_dist = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"banner", L"width", L"", v, 32, ini.c_str())) g_width = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"banner", L"seconds", L"", v, 32, ini.c_str()) && _wtof(v) > 0) g_showMs = (ULONGLONG)(_wtof(v) * 1000);
-        Log("negotiated in %ls (up %.2f, distance %.2f, width %.2f, %llu ms)", base, g_up, g_dist, g_width, g_showMs);
+        if (GetPrivateProfileStringW(L"viewers", L"up", L"", v, 32, ini.c_str())) g_vUp = (float)_wtof(v);
+        if (GetPrivateProfileStringW(L"viewers", L"right", L"", v, 32, ini.c_str())) g_vRight = (float)_wtof(v);
+        if (GetPrivateProfileStringW(L"viewers", L"distance", L"", v, 32, ini.c_str())) g_vDist = (float)_wtof(v);
+        if (GetPrivateProfileStringW(L"viewers", L"width", L"", v, 32, ini.c_str())) g_vWidth = (float)_wtof(v);
+        Log("negotiated in %ls (up %.2f, distance %.2f, width %.2f, %llu ms; viewers up %.2f right %.2f width %.2f)",
+            base, g_up, g_dist, g_width, g_showMs, g_vUp, g_vRight, g_vWidth);
         g_active = true;
-        std::thread(Watcher).detach();
+        std::thread(Watcher, &g_banner, L"banner.txt", g_showMs, Rasterize).detach();
+        std::thread(Watcher, &g_viewers, L"viewers.txt", 20000ULL, RasterizeViewers).detach();
     });
     return XR_SUCCESS;
 }
