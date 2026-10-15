@@ -8,6 +8,7 @@ layer/*.dll
 layer/*.lib
 layer/*.exp
 layer/*.obj
+layer/runtime_test.exe
 tests/preview.png
 promo/_work/
 promo/out/

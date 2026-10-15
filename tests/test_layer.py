@@ -2,6 +2,7 @@
 import ctypes as C
 import math
 import struct
+import subprocess
 import unittest
 import zlib
 from pathlib import Path
@@ -102,16 +103,26 @@ class Layer(unittest.TestCase):
         self.assertAlmostEqual(pose[6], -math.cos(st[0]), places=3)
         self.assertAlmostEqual(pose[0] ** 2 + pose[1] ** 2 + pose[2] ** 2 + pose[3] ** 2, 1.0, places=4)
 
-    def test_follow_wraps_around_and_zero_means_view_locked(self):
-        st = (C.c_float * 7)()
-        self.follow(st, 170, snap=True)
-        for _ in range(180):
-            self.follow(st, -170)  # 20 degrees the short way round, not 340 the long way
-        self.assertLess(abs(abs(math.degrees(st[0])) - 170), 2.5)
-        st0 = (C.c_float * 7)()
-        self.follow(st0, 0, snap=True, follow_deg=0)
-        self.follow(st0, 3, follow_deg=0)
-        self.assertEqual(st0[6], 1.0, "follow 0 chases every movement")
+    def test_follow_wraps_the_short_way_in_both_directions(self):
+        for start, target in ((170, -170), (-170, 170)):
+            with self.subTest(start=start, target=target):
+                st = (C.c_float * 7)()
+                self.follow(st, start, snap=True, follow_deg=10)
+                self.follow(st, target, follow_deg=10)
+                # A signed first step rejects a frozen anchor and a long-way rotation.
+                step = math.remainder(math.degrees(st[0]) - start, 360)
+                self.assertGreater(step * (1 if start > 0 else -1), 0.1)
+                self.assertLess(abs(step), 5)
+                for _ in range(180):
+                    self.follow(st, target, follow_deg=10)
+                error = math.remainder(math.degrees(st[0]) - target, 360)
+                self.assertLess(abs(error), 2.5)
+                self.assertEqual(st[6], 0.0, "settled at the target, not the starting heading")
+
+    def test_zero_follow_submits_view_locked_quads(self):
+        result = subprocess.run([str(ROOT / "layer" / "runtime_test.exe")],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_raster(self):
         buf = (C.c_uint32 * (W * H))()
