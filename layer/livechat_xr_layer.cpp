@@ -1,9 +1,12 @@
-// LiveChat XR overlay layer: an implicit OpenXR API layer that draws your stream chat as a head-locked
-// banner (VIEW-space quad) on top of OpenXR games.
+// LiveChat XR overlay layer: an implicit OpenXR API layer that draws your stream chat as a banner in front of you
+// on top of OpenXR games. The banner is anchored in the world (LOCAL space) and lazily follows your head, like Quest
+// menus: world-anchored layers survive the runtime's reprojection when the game drops frames, while a VIEW-locked
+// quad judders against your head every time it does.
 //
 // Config and IPC live in %LOCALAPPDATA%\LiveChatXR\:
 //   config.ini  [games] exes=Game1.exe,Game2.exe   only these processes get the banner; all others pass through
-//               [banner] seconds, up, distance, width (metres)
+//               [banner] seconds, up, distance, width (metres), follow (degrees you can look away before the
+//               banner glides back in front of you; 0 = locked to your view every frame, the old behaviour)
 //   banner.txt  written by the LiveChat XR app; shown for `seconds` after each write
 //   viewers.txt "tiktok 4\ntwitch 1" live viewer counts, drawn as a small top-right box with platform logos;
 //               the app rewrites it every 5 s, so it hides 20 s after the app stops (or at once when empty)
@@ -22,6 +25,7 @@
 #include <openxr/openxr_loader_negotiation.h>
 
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -36,6 +40,7 @@ static ULONGLONG g_showMs = 7000;
 // Placement (metres, VIEW space); overridden by config.ini [banner] / [viewers].
 static float g_up = 0.22f, g_dist = 1.0f, g_width = 0.62f;
 static float g_vUp = 0.36f, g_vRight = 0.45f, g_vDist = 1.0f, g_vWidth = 0.44f;
+static float g_followDeg = 20.f;  // config.ini [banner] follow; 0 = VIEW-locked
 
 static std::wstring g_dir;  // %LOCALAPPDATA%\LiveChatXR
 static std::atomic<bool> g_active{false}, g_disabled{false};
@@ -65,7 +70,7 @@ static XrInstance g_instance = XR_NULL_HANDLE;
 #define NEXT_FNS(X) X(xrCreateSession) X(xrDestroySession) X(xrEndFrame) X(xrDestroyInstance) \
     X(xrCreateReferenceSpace) X(xrDestroySpace) X(xrCreateSwapchain) X(xrDestroySwapchain) \
     X(xrEnumerateSwapchainFormats) X(xrEnumerateSwapchainImages) X(xrAcquireSwapchainImage) \
-    X(xrWaitSwapchainImage) X(xrReleaseSwapchainImage) X(xrGetSystemProperties)
+    X(xrWaitSwapchainImage) X(xrReleaseSwapchainImage) X(xrGetSystemProperties) X(xrLocateSpace)
 #define DECL(f) static PFN_##f n_##f;
 NEXT_FNS(DECL)
 
@@ -296,12 +301,58 @@ static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs,
     }
 }
 
+// ---------------------------------------------------------------- lazy follow (render thread only)
+// The anchor is a gravity-aligned yaw/pitch plus a head position in LOCAL space. It stays put while you look within
+// `follow` degrees of it, then glides back to your view (time constant TAU) until it is within SETTLE_DEG of it.
+struct Anchor { float yaw = 0, pitch = 0, x = 0, y = 0, z = 0; bool valid = false, moving = false; };
+static const float TAU = 0.2f, SETTLE_DEG = 2.f, MOVE_M = 0.3f, PI = 3.14159265f;
+
+static float Wrap(float a) { while (a > PI) a -= 2 * PI; while (a < -PI) a += 2 * PI; return a; }
+
+static void HeadAngles(const XrQuaternionf& q, float& yaw, float& pitch) {  // forward = q * (0, 0, -1)
+    float fx = -2 * (q.x * q.z + q.w * q.y), fy = -2 * (q.y * q.z - q.w * q.x), fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+    yaw = atan2f(-fx, -fz);
+    pitch = asinf(fy < -1 ? -1 : fy > 1 ? 1 : fy);
+}
+
+static float AngleDeg(float y1, float p1, float y2, float p2) {  // between two forward directions
+    float d = cosf(p1) * cosf(p2) * cosf(y1 - y2) + sinf(p1) * sinf(p2);
+    return acosf(d < -1 ? -1 : d > 1 ? 1 : d) * 180 / PI;
+}
+
+static void Step(Anchor& a, float yaw, float pitch, float x, float y, float z, float dt, bool snap) {
+    if (snap || !a.valid) { a = {yaw, pitch, x, y, z, true, false}; return; }
+    float err = AngleDeg(a.yaw, a.pitch, yaw, pitch);
+    float dx = x - a.x, dy = y - a.y, dz = z - a.z, dist = sqrtf(dx * dx + dy * dy + dz * dz);
+    if (err > g_followDeg || dist > MOVE_M) a.moving = true;
+    if (!a.moving) return;
+    float k = 1 - expf(-(dt > 0 ? dt : 0) / TAU);
+    a.yaw = Wrap(a.yaw + Wrap(yaw - a.yaw) * k);
+    a.pitch += (pitch - a.pitch) * k;
+    a.x += dx * k; a.y += dy * k; a.z += dz * k;
+    float ex = x - a.x, ey = y - a.y, ez = z - a.z;
+    if (AngleDeg(a.yaw, a.pitch, yaw, pitch) < SETTLE_DEG && sqrtf(ex * ex + ey * ey + ez * ez) < 0.02f) a.moving = false;
+}
+
+static XrPosef Place(const Anchor& a, float ox, float oy, float od) {  // offset (right, up, forward) from the anchor
+    float cy = cosf(a.yaw / 2), sy = sinf(a.yaw / 2), cp = cosf(a.pitch / 2), sp = sinf(a.pitch / 2);
+    XrQuaternionf q{cy * sp, sy * cp, -sy * sp, cy * cp};  // yaw about +Y, then pitch about the turned +X; no roll
+    float r00 = 1 - 2 * (q.y * q.y + q.z * q.z), r01 = 2 * (q.x * q.y - q.z * q.w), r02 = 2 * (q.x * q.z + q.y * q.w);
+    float r10 = 2 * (q.x * q.y + q.z * q.w), r11 = 1 - 2 * (q.x * q.x + q.z * q.z), r12 = 2 * (q.y * q.z - q.x * q.w);
+    float r20 = 2 * (q.x * q.z - q.y * q.w), r21 = 2 * (q.y * q.z + q.x * q.w), r22 = 1 - 2 * (q.x * q.x + q.y * q.y);
+    float vx = ox, vy = oy, vz = -od;
+    return {q, {a.x + r00 * vx + r01 * vy + r02 * vz, a.y + r10 * vx + r11 * vy + r12 * vz, a.z + r20 * vx + r21 * vy + r22 * vz}};
+}
+
 // ---------------------------------------------------------------- per-session overlay state
 struct Overlay {
     XrSession session = XR_NULL_HANDLE;
     ID3D11Device* dev = nullptr;
-    XrSpace view = XR_NULL_HANDLE;
+    XrSpace view = XR_NULL_HANDLE, local = XR_NULL_HANDLE;  // no LOCAL space = VIEW-locked fallback
     uint32_t maxLayers = 16;
+    Anchor anchor;
+    XrTime lastTime = 0;
+    bool wasVisible = false;
 } S;
 
 static void Teardown() {
@@ -314,6 +365,7 @@ static void Teardown() {
         p->dirty = true;  // a new session re-uploads the current pixels
     }
     if (S.view) n_xrDestroySpace(S.view);
+    if (S.local) n_xrDestroySpace(S.local);
     S = Overlay{};
 }
 
@@ -325,6 +377,11 @@ static bool Setup(XrSession session, XrSystemId sys, ID3D11Device* dev) {
 
     XrReferenceSpaceCreateInfo rs{XR_TYPE_REFERENCE_SPACE_CREATE_INFO, nullptr, XR_REFERENCE_SPACE_TYPE_VIEW, {{0, 0, 0, 1}, {0, 0, 0}}};
     if (XR_FAILED(n_xrCreateReferenceSpace(session, &rs, &S.view))) return false;
+    rs.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    if (g_followDeg > 0 && XR_FAILED(n_xrCreateReferenceSpace(session, &rs, &S.local))) {
+        S.local = XR_NULL_HANDLE;
+        Log("no LOCAL space; banner stays locked to the view");
+    }
 
     uint32_t n = 0;
     n_xrEnumerateSwapchainFormats(session, 0, &n, nullptr);
@@ -417,6 +474,26 @@ static XrResult XRAPI_CALL h_xrEndFrame(XrSession s, const XrFrameEndInfo* info)
             {&g_viewers, g_vRight - g_vWidth / 2, g_vUp, g_vDist, g_vWidth}};
         XrCompositionLayerQuad quads[2];
         std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
+        bool anyVisible = false;
+        {
+            std::lock_guard<std::mutex> l(g_mx);
+            ULONGLONG now = GetTickCount64();
+            anyVisible = now < g_banner.until || now < g_viewers.until;
+        }
+        bool world = false;  // place in LOCAL this frame? Falls back to VIEW when tracking is lost.
+        if (S.local && anyVisible) {
+            XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+            const XrSpaceLocationFlags need = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT;
+            if (XR_SUCCEEDED(n_xrLocateSpace(S.view, S.local, info->displayTime, &loc)) && (loc.locationFlags & need) == need) {
+                float yaw, pitch;
+                HeadAngles(loc.pose.orientation, yaw, pitch);
+                float dt = S.lastTime ? (float)((info->displayTime - S.lastTime) * 1e-9) : 0.f;
+                Step(S.anchor, yaw, pitch, loc.pose.position.x, loc.pose.position.y, loc.pose.position.z, dt, !S.wasVisible);
+                S.lastTime = info->displayTime;
+                world = true;
+            }
+        }
+        S.wasVisible = anyVisible;  // the next banner after a quiet spell appears straight ahead
         for (int i = 0; i < 2; ++i) {
             Pane& P = *panes[i].p;
             bool dirty, visible;
@@ -430,10 +507,11 @@ static XrResult XRAPI_CALL h_xrEndFrame(XrSession s, const XrFrameEndInfo* info)
             XrCompositionLayerQuad& q = quads[i];
             q = {XR_TYPE_COMPOSITION_LAYER_QUAD};
             q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
-            q.space = S.view;
+            q.space = world ? S.local : S.view;
             q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
             q.subImage = {P.sc, {{0, 0}, {P.w, P.h}}, 0};
-            q.pose = {{0, 0, 0, 1}, {panes[i].x, panes[i].y, -panes[i].d}};
+            q.pose = world ? Place(S.anchor, panes[i].x, panes[i].y, panes[i].d)
+                           : XrPosef{{0, 0, 0, 1}, {panes[i].x, panes[i].y, -panes[i].d}};
             q.size = {panes[i].w, panes[i].w * P.h / P.w};
             layers.push_back((const XrCompositionLayerBaseHeader*)&q);
         }
@@ -499,6 +577,22 @@ extern "C" __declspec(dllexport) void livechatxr_viewers_test(const char* u8, ui
     memcpy(out, px.data(), px.size() * 4);
 }
 
+// Self-test hook: advance a follow anchor. st = {yaw, pitch, x, y, z, valid, moving} (radians, metres), updated in
+// place; pose7 = {qx, qy, qz, qw, px, py, pz} of a point 1 m straight ahead of the new anchor.
+extern "C" __declspec(dllexport) void livechatxr_follow_test(float* st, float yaw, float pitch, float x, float y, float z,
+                                                             float dt, int snap, float followDeg, float* pose7) {
+    float keep = g_followDeg;
+    g_followDeg = followDeg;
+    Anchor a{st[0], st[1], st[2], st[3], st[4], st[5] != 0, st[6] != 0};
+    Step(a, yaw, pitch, x, y, z, dt, snap != 0);
+    g_followDeg = keep;
+    float out[7] = {a.yaw, a.pitch, a.x, a.y, a.z, a.valid ? 1.f : 0.f, a.moving ? 1.f : 0.f};
+    memcpy(st, out, sizeof out);
+    XrPosef p = Place(a, 0, 0, 1);
+    float o[7] = {p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w, p.position.x, p.position.y, p.position.z};
+    memcpy(pose7, o, sizeof o);
+}
+
 extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerInterface(
     const XrNegotiateLoaderInfo* li, const char* /*layerName*/, XrNegotiateApiLayerRequest* req) {
     if (!li || !req || li->structType != XR_LOADER_INTERFACE_STRUCT_LOADER_INFO ||
@@ -538,12 +632,13 @@ extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerIn
         if (GetPrivateProfileStringW(L"banner", L"distance", L"", v, 32, ini.c_str())) g_dist = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"banner", L"width", L"", v, 32, ini.c_str())) g_width = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"banner", L"seconds", L"", v, 32, ini.c_str()) && _wtof(v) > 0) g_showMs = (ULONGLONG)(_wtof(v) * 1000);
+        if (GetPrivateProfileStringW(L"banner", L"follow", L"", v, 32, ini.c_str()) && _wtof(v) >= 0) g_followDeg = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"viewers", L"up", L"", v, 32, ini.c_str())) g_vUp = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"viewers", L"right", L"", v, 32, ini.c_str())) g_vRight = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"viewers", L"distance", L"", v, 32, ini.c_str())) g_vDist = (float)_wtof(v);
         if (GetPrivateProfileStringW(L"viewers", L"width", L"", v, 32, ini.c_str())) g_vWidth = (float)_wtof(v);
-        Log("negotiated in %ls (up %.2f, distance %.2f, width %.2f, %llu ms; viewers up %.2f right %.2f width %.2f)",
-            base, g_up, g_dist, g_width, g_showMs, g_vUp, g_vRight, g_vWidth);
+        Log("negotiated in %ls (up %.2f, distance %.2f, width %.2f, %llu ms, follow %.0f deg; viewers up %.2f right %.2f width %.2f)",
+            base, g_up, g_dist, g_width, g_showMs, g_followDeg, g_vUp, g_vRight, g_vWidth);
         g_active = true;
         std::thread(Watcher, &g_banner, L"banner.txt", g_showMs, Rasterize).detach();
         std::thread(Watcher, &g_viewers, L"viewers.txt", 20000ULL, RasterizeViewers).detach();

@@ -19,6 +19,7 @@ Stored in `%LOCALAPPDATA%\LiveChatXR\config.ini`. The Python reader overlays sav
 | banner / max_lines | integer, `3` | Lines selected per batch; Settings requires greater than zero |
 | banner / up | float, `0.22` | Metres above eye line; zero and negative values allowed |
 | banner / distance | float, `1.0` | Metres forward; Settings requires greater than zero |
+| banner / follow | float, `20` | Degrees you can look away before the banner glides back in front of you. The banner is anchored in the room, so it stays steady when the game drops frames; `0` locks it to your view every frame (the old behaviour). Read by the headset layer at game start; not shown in Settings |
 | banner / width | float, `0.62` | Metres wide; Settings requires greater than zero |
 
 Settings validation is not a general-purpose config-file schema: hand-edited values bypass its checks. Use normal finite numbers. Placement, game selection and layer duration require a game restart. Saving restarts the app's chat connection. **Start with Windows** controls the current user's `LiveChatXR` registry Run entry; it is not an INI option.

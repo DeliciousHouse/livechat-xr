@@ -1,6 +1,8 @@
 """Checks the built layer DLL outside any game: loader handshake + banner raster (writes tests/preview.png)."""
 import ctypes as C
+import math
 import struct
+import subprocess
 import unittest
 import zlib
 from pathlib import Path
@@ -74,6 +76,53 @@ class Layer(unittest.TestCase):
         one = draw("twitch 1")
         width = lambda b: sum(1 for p in b[VH // 2 * VW:(VH // 2 + 1) * VW] if p >> 24)
         self.assertLess(width(one), width(buf), "the box shrinks to its text")
+
+    def follow(self, st, yaw_deg, pitch_deg=0.0, pos=(0.0, 0.0, 0.0), dt=1 / 90, snap=False, follow_deg=20.0):
+        pose = (C.c_float * 7)()
+        f = self.dll.livechatxr_follow_test
+        f.argtypes = [C.POINTER(C.c_float)] + [C.c_float] * 6 + [C.c_int, C.c_float, C.POINTER(C.c_float)]
+        f(st, math.radians(yaw_deg), math.radians(pitch_deg), *pos, dt, int(snap), follow_deg, pose)
+        return list(pose)
+
+    def test_banner_holds_still_until_you_look_away_then_glides_back(self):
+        # 2026-10-14: the VIEW-locked banner "jumps around" when the game drops frames and the runtime reprojects.
+        st = (C.c_float * 7)()
+        pose = self.follow(st, 0, snap=True)
+        self.assertAlmostEqual(pose[6], -1.0, places=4)  # 1 m straight ahead (-Z) after a snap
+        for _ in range(90):  # a second of small head motion stays inside the 20 degree dead zone
+            self.follow(st, 12, 4, pos=(0.05, 0.0, 0.02))
+        self.assertAlmostEqual(math.degrees(st[0]), 0.0, places=3)
+        self.assertEqual(st[6], 0.0, "not moving")
+        self.follow(st, 45)  # turn well past it
+        self.assertEqual(st[6], 1.0, "starts gliding")
+        for _ in range(180):  # two seconds later it has settled in front of the new heading
+            pose = self.follow(st, 45)
+        self.assertLess(abs(math.degrees(st[0]) - 45), 2.5)
+        self.assertEqual(st[6], 0.0, "settled")
+        self.assertAlmostEqual(pose[4], -math.sin(st[0]), places=3)  # the quad sits along the new heading
+        self.assertAlmostEqual(pose[6], -math.cos(st[0]), places=3)
+        self.assertAlmostEqual(pose[0] ** 2 + pose[1] ** 2 + pose[2] ** 2 + pose[3] ** 2, 1.0, places=4)
+
+    def test_follow_wraps_the_short_way_in_both_directions(self):
+        for start, target in ((170, -170), (-170, 170)):
+            with self.subTest(start=start, target=target):
+                st = (C.c_float * 7)()
+                self.follow(st, start, snap=True, follow_deg=10)
+                self.follow(st, target, follow_deg=10)
+                # A signed first step rejects a frozen anchor and a long-way rotation.
+                step = math.remainder(math.degrees(st[0]) - start, 360)
+                self.assertGreater(step * (1 if start > 0 else -1), 0.1)
+                self.assertLess(abs(step), 5)
+                for _ in range(180):
+                    self.follow(st, target, follow_deg=10)
+                error = math.remainder(math.degrees(st[0]) - target, 360)
+                self.assertLess(abs(error), 2.5)
+                self.assertEqual(st[6], 0.0, "settled at the target, not the starting heading")
+
+    def test_zero_follow_submits_view_locked_quads(self):
+        result = subprocess.run([str(ROOT / "layer" / "runtime_test.exe")],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_raster(self):
         buf = (C.c_uint32 * (W * H))()

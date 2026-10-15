@@ -4,3 +4,5 @@ setlocal
 where cl >nul 2>nul || call "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 cd /d "%~dp0"
 cl /nologo /std:c++17 /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS /LD /Iinclude livechat_xr_layer.cpp /Fe:livechat_xr_layer.dll /link d3d11.lib gdi32.lib user32.lib
+if errorlevel 1 exit /b 1
+cl /nologo /std:c++17 /O2 /MT /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS /Iinclude ..\tests\layer_runtime_test.cpp /Fe:runtime_test.exe /link d3d11.lib gdi32.lib user32.lib
