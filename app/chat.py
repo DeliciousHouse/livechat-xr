@@ -610,6 +610,11 @@ def yt_page(html_text: str) -> dict | None:
     now = re.search(r'"isLiveNow":(true|false)', html_text)
     if (now[1] != "true") if now else not re.search(r'"isLive":true', html_text):
         return None
+    # The channel-ID /live page has no isLiveNow; after a stream it shows a scheduled placeholder that still says
+    # "isLive":true and has a chat, but its player reports LIVE_STREAM_OFFLINE and isUpcoming (2026-10-16).
+    playable = re.search(r'"playabilityStatus":\{"status":"(\w+)"', html_text)
+    if (playable and playable[1] != "OK") or re.search(r'"isUpcoming":true', html_text):
+        return None
     key = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_text)
     cont = re.search(r'"liveChatRenderer":\{.{0,600}?"continuation":"([^"]+)"', html_text, re.S)
     if not (key and cont):

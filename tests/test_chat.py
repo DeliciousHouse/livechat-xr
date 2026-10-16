@@ -301,6 +301,10 @@ class YouTube(unittest.TestCase):
         # An ended broadcast keeps "isLive":true on its /live page; only "isLiveNow" tells (2026-10-16, @PopLightningVR).
         self.assertIsNone(chat.yt_page(live.replace('"isLive":true', '"isLiveNow":false "isLive":true')))
         self.assertIsNotNone(chat.yt_page(live.replace('"isLive":true', '"isLiveNow":true "isLive":true')))
+        # Channel-ID page after a stream: scheduled placeholder, no isLiveNow, player offline (2026-10-16).
+        self.assertIsNone(chat.yt_page('"playabilityStatus":{"status":"LIVE_STREAM_OFFLINE"} ' + live))
+        self.assertIsNone(chat.yt_page(live + ' "isUpcoming":true'))
+        self.assertIsNotNone(chat.yt_page('"playabilityStatus":{"status":"OK"} ' + live))
 
     def test_next_and_view_switch(self):
         self.assertEqual(chat.yt_next({"continuations": [{"invalidationContinuationData": {"continuation": "C2", "timeoutMs": 10000}}]}), ("C2", 10))
