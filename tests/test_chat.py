@@ -298,6 +298,9 @@ class YouTube(unittest.TestCase):
                 ' "isLive":true "liveChatRenderer":{"continuations":[{"reloadContinuationData":{"continuation":"CONT1"}}]}')
         self.assertEqual(chat.yt_page(live), {"key": "KEY1", "version": "2.1", "continuation": "CONT1", "owner": "UC" + "a" * 22})
         self.assertIsNone(chat.yt_page('"INNERTUBE_API_KEY":"K" "continuation":"other page"'))  # channel page, not live
+        # An ended broadcast keeps "isLive":true on its /live page; only "isLiveNow" tells (2026-10-16, @PopLightningVR).
+        self.assertIsNone(chat.yt_page(live.replace('"isLive":true', '"isLiveNow":false "isLive":true')))
+        self.assertIsNotNone(chat.yt_page(live.replace('"isLive":true', '"isLiveNow":true "isLive":true')))
 
     def test_next_and_view_switch(self):
         self.assertEqual(chat.yt_next({"continuations": [{"invalidationContinuationData": {"continuation": "C2", "timeoutMs": 10000}}]}), ("C2", 10))
