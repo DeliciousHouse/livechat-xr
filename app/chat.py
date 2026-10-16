@@ -605,7 +605,10 @@ def youtube_line(item: dict, owner: str = "") -> str | None:
 
 def yt_page(html_text: str) -> dict | None:
     """Live page -> {key, version, continuation, owner}, or None when the channel is not live right now."""
-    if not re.search(r'"isLive(?:Now)?":true', html_text):
+    # An ended broadcast's /live page still says "isLive":true but "isLiveNow":false; trust isLiveNow when present,
+    # or the relay re-attaches to the dead chat and misses the next stream (2026-10-16).
+    now = re.search(r'"isLiveNow":(true|false)', html_text)
+    if (now[1] != "true") if now else not re.search(r'"isLive":true', html_text):
         return None
     key = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', html_text)
     cont = re.search(r'"liveChatRenderer":\{.{0,600}?"continuation":"([^"]+)"', html_text, re.S)
