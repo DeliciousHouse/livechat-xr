@@ -9,8 +9,10 @@ import urllib.parse
 from pathlib import Path
 from unittest import mock
 
+
 ROOT = Path(__file__).resolve().parent.parent
-sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "app")]
+sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "app"), str(ROOT / "tests")]
+from relay_sync import session_writes
 
 
 class RelayFixture(unittest.TestCase):
@@ -20,20 +22,25 @@ class RelayFixture(unittest.TestCase):
         server = qa_relay.server
         relay = chat.relay
         tag = "\nvia LiveChat XR - livechat.deliciouswines.org"
+        loop, delivered, finished = None, asyncio.Queue(), asyncio.Event()
 
         async def source(channel, emit, status, key="", ask=None, tally=None, **kwargs):
             status(f"{platform}: connected to qa")
             emit("Fan: first")
-            await asyncio.sleep(0.03)
+            await delivered.get()
             status(f"{platform}: connected to qa")
             emit("Fan: second")
-            await asyncio.sleep(0.03)
+            await delivered.get()
+            status(f"{platform}: qa went offline, waiting")
             status(f"{platform}: qa went offline, waiting")
             status(f"{platform}: connected to qa")
             emit("x" * 2000)
-            await asyncio.sleep(0.03)
+            for _ in range(2 if plan in ("free", "founder") else 1):
+                await delivered.get()
             emit("Fan: fourth")
-            await asyncio.sleep(3600)
+            await delivered.get()
+            finished.set()
+            await asyncio.Event().wait()
 
         async def fast_relay(*args, **kwargs):
             await relay(*args, seconds=0.01, **kwargs)
@@ -45,17 +52,28 @@ class RelayFixture(unittest.TestCase):
                     server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan, platform_icons=False,
                                              webhook=qa_relay.HOOKS["fixture-one"])
                     posts = []
-                    def thread(target, args, daemon):
-                        return mock.Mock(start=lambda: target(*args))
+                    def post(url, text, **kwargs):
+                        posts.append(text)
+                        if not text.startswith("Stream ended"):
+                            assert loop is not None
+                            loop.call_soon_threadsafe(delivered.put_nowait, None)
+                        return True
                     with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
-                            mock.patch.object(chat, "post_discord", side_effect=lambda url, text, **kw: posts.append(text)):
+                            mock.patch.object(chat, "post_discord", side_effect=post), session_writes() as writers:
                         async def go():
+                            nonlocal loop, delivered, finished
+                            loop = asyncio.get_running_loop()
+                            delivered, finished = asyncio.Queue(), asyncio.Event()
                             task = asyncio.create_task(server.run("qa"))
-                            await asyncio.sleep(0.13)
-                            task.cancel()
-                            with self.assertRaises(asyncio.CancelledError):
-                                await task
+                            try:
+                                await asyncio.wait_for(finished.wait(), 2)
+                            finally:
+                                task.cancel()
+                                with self.assertRaises(asyncio.CancelledError):
+                                    await task
                         asyncio.run(go())
+                    self.assertEqual(len(writers), 1)
+                    self.assertEqual(sum(text.startswith("Stream ended") for text in posts), 1)
                     posts = [text for text in posts if not text.startswith("Stream ended")]
                     self.assertEqual(posts, ["Fan: first" + tag, "Fan: second",
                                              "x" * 2000, tag.lstrip("\n"), "Fan: fourth"] if plan in ("free", "founder")

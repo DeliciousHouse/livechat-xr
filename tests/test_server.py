@@ -70,6 +70,38 @@ class ChannelCheck(unittest.TestCase):
             self.assertIsNone(server.CHANNEL["tiktok"].match(normal))
 
 
+    def test_youtube_links_resolve_to_the_owning_channel_handle(self):
+        # Video/live links must not become unrelated @watch or @channel handles.
+        cid = "UC" + "a" * 22
+        pages = {"https://www.youtube.com/watch?v=abcDEF12345": '"ownerProfileUrl":"http://www.youtube.com/@StreamerOne"',
+                 "https://www.youtube.com/watch?v=noOwner0001": f'"externalChannelId":"{cid}"',
+                 "https://www.youtube.com/c/OldName": f'"externalId":"{cid}"',
+                 "https://www.youtube.com/user/OldName": f'"externalId":"{cid}"'}
+        resolve = lambda platform, handle, identity: {"id": identity["id"], "handle": "@StreamerOne"} if identity["id"] == cid else None
+        with mock.patch.object(chat, "_yt_get", side_effect=lambda url: pages.get(url, "")), \
+                mock.patch.object(chat, "resolve_identity", side_effect=resolve):
+            for raw in ("https://www.youtube.com/watch?v=abcDEF12345&t=3", "https://youtu.be/abcDEF12345?si=x",
+                        "youtu.be/abcDEF12345", "youtube.com/live/abcDEF12345",
+                        "https://music.youtube.com/watch?v=abcDEF12345", "music.youtube.com/watch?v=abcDEF12345",
+                        "https://www.youtube.com/shorts/abcDEF12345", "https://www.youtube.com/watch?v=noOwner0001",
+                        f"https://www.youtube.com/channel/{cid}", "https://www.youtube.com/c/OldName",
+                        "https://www.youtube.com/user/OldName", "youtube.com/@StreamerOne/live",
+                        "https://m.youtube.com/@StreamerOne", "@StreamerOne"):
+                with self.subTest(raw=raw):
+                    self.assertEqual(server.normalise_channel("youtube", raw), "@StreamerOne")
+            for raw in ("https://www.youtube.com/watch?v=", "https://www.youtube.com/watch?v=unknownVid1",
+                        "https://www.youtube.com/channel/notAnId", "https://youtube.com.evil.test/watch?v=abcDEF12345",
+                        "https://youtu.be.evil.test/abcDEF12345", "https://music.youtube.com.evil.test/watch?v=abcDEF12345",
+                        "https://youtube.com@evil.test/watch?v=abcDEF12345"):
+                with self.subTest(raw=raw):
+                    self.assertIsNone(server.CHANNEL["youtube"].fullmatch(server.normalise_channel("youtube", raw)))
+        with mock.patch.object(chat, "_yt_get", side_effect=TimeoutError):
+            self.assertIsNone(server.CHANNEL["youtube"].fullmatch(
+                server.normalise_channel("youtube", "https://youtu.be/abcDEF12345")))
+        self.assertEqual(server.normalise_channel("tiktok", "tiktok.com/@ann1"), "@ann1")
+        self.assertEqual(server.normalise_channel("twitch", "www.twitch.tv/Ann1"), "ann1")
+
+
 class Server(unittest.TestCase):
     def setUp(self):
         server.DATA = Path(tempfile.mkdtemp())
