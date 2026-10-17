@@ -163,6 +163,90 @@ class TikTok(unittest.TestCase):
         self.assertEqual((tally.comments, len(tally.chatters), tally.gifts, tally.peak, len(tally.followers)), (1, 1, 2, 9, 1))
 
 
+class TikTokOwnerComment(unittest.TestCase):
+    CODE = "T14-test-code"
+
+    def replay(self, **kwargs):
+        from types import SimpleNamespace as NS
+        from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, GiftEvent, RoomUserSeqEvent
+
+        viewer = NS(unique_id="viewer", nickname="Viewer")
+        events = [
+            (ConnectEvent, NS()),
+            (CommentEvent, NS(user=NS(unique_id="Me_Mixed", nickname="Owner"), comment="wrong code")),
+            (CommentEvent, NS(user=NS(unique_id="@ME_MIXED", nickname="Owner"), comment=self.CODE)),
+            (CommentEvent, NS(user=NS(display_id="me_MIXED", nickname="Owner"), comment=self.CODE)),
+            (CommentEvent, NS(user=NS(unique_id="impostor", nickname="Me_Mixed"), comment=self.CODE)),
+            (CommentEvent, NS(user=NS(nickname="Me_Mixed"), comment=self.CODE)),
+            (CommentEvent, NS(user=None, comment=self.CODE)),
+            (CommentEvent, NS(user=viewer, comment="hi")),
+            (CommentEvent, NS(user=viewer, comment="again")),
+            (GiftEvent, NS(user=viewer, gift=NS(name="Rose"), streaking=True, repeat_count=2)),
+            (GiftEvent, NS(user=viewer, gift=NS(name="Rose"), streaking=False, repeat_count=2)),
+            (FollowEvent, NS(user=viewer)),
+            (RoomUserSeqEvent, NS(total=9)),
+            (RoomUserSeqEvent, NS(total=4)),
+        ]
+
+        class FakeClient:
+            def __init__(self, unique_id):
+                self.handlers, self.connected = {}, False
+
+            def on(self, cls):
+                return lambda fn: self.handlers.setdefault(cls, fn)
+
+            async def connect(self, **_):
+                for cls, event in events:
+                    await self.handlers[cls](event)
+                raise asyncio.CancelledError
+
+        out, tally = [], chat.Tally("tiktok", "me_mixed")
+        with mock.patch("TikTokLive.TikTokLiveClient", FakeClient), mock.patch.object(chat.Session, "save") as save:
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(chat.tiktok("@Me_MiXeD", out.append, lambda s: None,
+                                        follow_ask="follow me", tally=tally, **kwargs))
+            save.assert_called_once_with("me_mixed", "")
+        return out, (tally.comments, tally.chatters, tally.gifts, tally.peak, tally.followers)
+
+    def test_owner_only_verification_and_output_parity(self):
+        received, verified = [], []
+
+        def check_code(handle, text):
+            received.append((handle, text))
+            verified.append(text == self.CODE)
+
+        without = self.replay()
+        with_hook = self.replay(on_owner_comment=check_code)
+        self.assertEqual(received, [("me_mixed", "wrong code"), ("me_mixed", self.CODE), ("me_mixed", self.CODE)])
+        self.assertEqual(verified, [False, True, True])
+        self.assertEqual(with_hook, without)
+        self.assertEqual(with_hook[0], [f"Me_Mixed: {self.CODE}", f"Me_Mixed: {self.CODE}",
+                                       f"?: {self.CODE}", "Viewer: hi", "Viewer: again",
+                                       "» follow me", "🎁 Viewer sent Rose x2"])
+        self.assertEqual(with_hook[1], (5, {"impostor", "Me_Mixed", "?", "viewer"}, 1, 9, {"viewer"}))
+        self.assertEqual(chat.batch(with_hook[0], max_lines=10).encode(),
+                         chat.batch(without[0], max_lines=10).encode())
+
+    def test_callback_failure_is_private_and_chat_continues(self):
+        callback = mock.Mock(side_effect=ValueError(self.CODE))
+        with self.assertLogs(chat.log, level="WARNING") as logs:
+            out, _ = self.replay(on_owner_comment=callback)
+        self.assertEqual(callback.call_count, 3)
+        self.assertEqual([r.getMessage() for r in logs.records], ["tiktok owner comment callback failed"] * 3)
+        self.assertTrue(all(r.exc_info is None for r in logs.records))
+        self.assertNotIn(self.CODE, "\n".join(logs.output))
+        self.assertIn("Viewer: again", out)
+
+    def test_callback_cancellation_propagates(self):
+        callback = mock.Mock(side_effect=asyncio.CancelledError)
+        with mock.patch.object(chat.log, "warning") as warning:
+            out, counts = self.replay(on_owner_comment=callback)
+        callback.assert_called_once_with("me_mixed", "wrong code")
+        warning.assert_not_called()
+        self.assertEqual(out, [])
+        self.assertEqual(counts, (0, set(), 0, None, set()))
+
+
 class Relay(unittest.TestCase):
     def test_runner_tag_on_each_connection_and_opt_out(self):
         async def source(channel, emit, status, key="", ask=None, **_):
