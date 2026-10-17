@@ -143,6 +143,13 @@ def retry_delay(value):
         return 60
 
 
+async def wait_retry(delay):
+    # Windows event-loop timers can wake early; never retry before Discord's deadline.
+    deadline = time.perf_counter() + delay
+    while (remaining := deadline - time.perf_counter()) > 0:
+        await asyncio.sleep(remaining)
+
+
 def request_json(url, *, headers=None, data=None, method=None):
     req = urllib.request.Request(url, data=json.dumps(data).encode() if data is not None else None,
                                  headers=headers or {}, method=method)
@@ -173,6 +180,7 @@ class Network:
         self.error = ""
         self.loop = None
         self.tasks = set()
+        self.io_tasks = set()
         self.stopping = threading.Event()
         self.guard = threading.Lock()
         self.sources = {p: {"last_success": 0, "error": "", "success_streak": 0} for p in INTERVALS}
@@ -189,6 +197,16 @@ class Network:
         task.add_done_callback(self.tasks.discard)
         return task
 
+    async def offload(self, function, *args, **kwargs):
+        worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        self.io_tasks.add(worker)
+        def finished(task):
+            self.io_tasks.discard(task)
+            if not task.cancelled(): task.exception()
+        worker.add_done_callback(finished)
+        # Cancelling a coroutine cannot stop its thread; keep the worker joinable at shutdown.
+        return await asyncio.shield(worker)
+
     async def start(self):
         if self.enabled:
             return
@@ -198,7 +216,7 @@ class Network:
         self.stopping.clear()
         try:
             VerifyKey(bytes.fromhex(self.config["DISCORD_PUBLIC_KEY"]))
-            await asyncio.to_thread(self.store.initialize)
+            await self.offload(self.store.initialize)
         except Exception as exc:
             self.error = type(exc).__name__
             log.error("Discovery off: %s", self.error)
@@ -218,6 +236,7 @@ class Network:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*list(self.io_tasks), return_exceptions=True)
         self.tasks.clear()
 
     async def poll(self, platform):
@@ -225,11 +244,11 @@ class Network:
         while not self.stopping.is_set():
             delay = INTERVALS[platform]
             try:
-                rows = await asyncio.to_thread(getattr(self, "collect_" + platform))
+                rows = await self.offload(getattr(self, "collect_" + platform))
                 if self.stopping.is_set():
                     return
                 now = time.time()
-                await asyncio.to_thread(self.store.upsert_presence, platform, rows, now)
+                await self.offload(self.store.upsert_presence, platform, rows, now)
                 with self.guard:
                     state = self.sources[platform]
                     state.update(last_success=now, error="", success_streak=state["success_streak"] + 1)
@@ -314,12 +333,12 @@ class Network:
     async def resolve_identity(self, platform, channel):
         handle = self.normalise_channel(platform, channel)
         if platform == "twitch":
-            return await asyncio.to_thread(chat.resolve_identity, platform, handle)
+            return await self.offload(chat.resolve_identity, platform, handle)
         if platform == "youtube":
             # The shared resolver scrapes with a 15s timeout, so network uses only the official API.
             params = dict(part="snippet", key=self.config["YOUTUBE_API_KEY"])
             params["id" if re.fullmatch(r"UC[\w-]{22}", handle) else "forHandle"] = handle
-            body = await asyncio.to_thread(self.api, "https://www.googleapis.com/youtube/v3/channels", params)
+            body = await self.offload(self.api, "https://www.googleapis.com/youtube/v3/channels", params)
             items = body["items"]
             return {"id": items[0]["id"], "handle": items[0]["snippet"].get("customUrl", handle)} if items else None
         return None  # O6 unresolved: no TikTok presence or ownership claims here.
@@ -332,9 +351,9 @@ class Network:
 
     async def discord(self, method, path, payload):
         for attempt in range(4):
-            code, body = await asyncio.to_thread(self._discord, method, path, payload)
+            code, body = await self.offload(self._discord, method, path, payload)
             if code == 429 and attempt < 3:
-                await asyncio.sleep(retry_delay(body.get("retry_after", 60)))
+                await wait_retry(retry_delay(body.get("retry_after", 60)))
                 continue
             if isinstance(body, dict) and body.get("code") == 50007:
                 return {"dm_closed": True}
@@ -354,13 +373,13 @@ class Network:
                 await asyncio.sleep(300)
 
     async def send_dm(self, listing_id, text):
-        listing = await asyncio.to_thread(self.store.listing, listing_id)
+        listing = await self.offload(self.store.listing, listing_id)
         if not listing or listing["dm_closed"] or not listing["discord_id"]: return False
         channel = await self.discord("POST", "/users/@me/channels", {"recipient_id": listing["discord_id"]})
         if not channel.get("dm_closed"):
             channel = await self.discord("POST", f'/channels/{channel["id"]}/messages', message("Pop1 Live: " + text))
         if channel.get("dm_closed"):
-            await asyncio.to_thread(self.store.set_listing, listing_id, dm_closed=True)
+            await self.offload(self.store.set_listing, listing_id, dm_closed=True)
             return False
         return True
 

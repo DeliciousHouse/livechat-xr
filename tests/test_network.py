@@ -155,8 +155,8 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.net = network.Network(Path(self.tmp.name), server.normalise_channel, config())
         self.net.config["DISCORD_PUBLIC_KEY"] = SigningKey.generate().verify_key.encode().hex()
-        self.addAsyncCleanup(self.net.stop)
         self.addCleanup(self.tmp.cleanup)
+        self.addAsyncCleanup(self.net.stop)
 
     async def test_missing_each_config_is_off(self):
         for name in network.REQUIRED:
@@ -205,9 +205,9 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(role_payload["allowed_mentions"], {"parse": [], "roles": ["123"]})
         self.assertTrue(role_payload["content"].endswith("<@&123>"))
         with mock.patch.object(self.net, "_discord", side_effect=[(429, {"retry_after": .05}), (200, {})]) as request:
-            start = time.monotonic()
+            start = time.perf_counter()
             await self.net.discord("POST", "/channels/123/messages", payload)
-            self.assertGreaterEqual(time.monotonic() - start, .05)
+            self.assertGreaterEqual(time.perf_counter() - start, .05)
             self.assertEqual(request.call_count, 2)
         with mock.patch.object(self.net, "_discord", return_value=(403, {"code": 50007})) as request:
             self.assertFalse(await self.net.send_dm(lid, "hello"))
@@ -223,6 +223,36 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.call_args_list[0], request.call_args_list[1])
         self.assertEqual(request.call_args.args[:2], ("PUT", "/applications/123/guilds/123/commands"))
         self.assertEqual([c["name"] for c in request.call_args.args[2]], ["network-status"])
+
+    async def test_stop_joins_inflight_sqlite_work(self):
+        entered, release = threading.Event(), threading.Event()
+        real_upsert = self.net.store.upsert_presence
+        def slow_write(*args):
+            entered.set()
+            if not release.wait(3): raise TimeoutError("writer stalled")
+            return real_upsert(*args)
+        with mock.patch.object(self.net, "collect_twitch", return_value=[]), \
+                mock.patch.object(self.net, "collect_youtube", return_value=[]), \
+                mock.patch.object(self.net, "register_commands", new=mock.AsyncMock()), \
+                mock.patch.object(self.net.store, "upsert_presence", slow_write):
+            await self.net.start()
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            stopped = asyncio.create_task(self.net.stop())
+            try:
+                await asyncio.sleep(.05)
+                self.assertFalse(stopped.done(), "shutdown must join the SQLite thread, not just its cancelled coroutine")
+            finally:
+                release.set()
+                await stopped
+            self.assertEqual(self.net.io_tasks, set())
+
+    async def test_retry_wait_rechecks_early_wakeups(self):
+        with mock.patch.object(network.time, "perf_counter", side_effect=[0, .01, .03, .05]), \
+                mock.patch.object(network.asyncio, "sleep", new=mock.AsyncMock()) as sleep:
+            await network.wait_retry(.05)
+        self.assertEqual(sleep.await_count, 2)
+        self.assertAlmostEqual(sleep.await_args_list[0].args[0], .04)
+        self.assertAlmostEqual(sleep.await_args_list[1].args[0], .02)
 
     async def test_real_poll_success_failure_recovery_and_quota_backoff(self):
         await asyncio.to_thread(self.net.store.initialize)

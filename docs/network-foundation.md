@@ -4,7 +4,7 @@ This is the T8–T10/T13/T16 foundation, not Stage 1 activation. Hosted chat and
 
 ## Runtime and integration contract
 
-`server.main()` constructs `network.Network(DATA, normalise_channel)` on the existing asyncio loop. `start()` validates configuration and initializes `DATA/listings.db`; `stop()` cancels and joins its asyncio tasks. SIGTERM and normal loop shutdown invoke `stop()`. A running urllib operation cannot be forcibly interrupted: it has a 10-second timeout and the stop event prevents another page request. All collector, identity, SQLite and Discord I/O initiated on the loop is offloaded with `asyncio.to_thread`. At most one poll per source is outstanding; failures back off without refreshing last-success.
+`server.main()` constructs `network.Network(DATA, normalise_channel)` on the existing asyncio loop. `start()` validates configuration and initializes `DATA/listings.db`; `stop()` cancels its asyncio tasks and joins their shielded I/O workers before returning. SIGTERM and normal loop shutdown invoke `stop()`. A running urllib operation cannot be forcibly interrupted: it has a 10-second timeout and the stop event prevents another page request. All collector, identity, SQLite and Discord I/O initiated on the loop is offloaded with `asyncio.to_thread`. At most one poll per source is outstanding; failures back off without refreshing last-success.
 
 Required configuration names (values must never appear in logs):
 
@@ -43,6 +43,7 @@ Run with Python 3.12 and PyNaCl 1.6.0 (server/test dependency only):
 | Requirement | Runnable check |
 |---|---|
 | T8 lifecycle, catch/retry, missing every required name | `Runtime.test_start_stop_and_retry_do_not_refresh_success`, `test_missing_each_config_is_off` |
+| Shutdown joins in-flight SQLite workers; rate limits survive early Windows timer wakeups | `Runtime.test_stop_joins_inflight_sqlite_work`, `test_retry_wait_rechecks_early_wakeups` |
 | T8 real image COPY/import layout, production main startup/shutdown, network-only version change | `Packaging.test_docker_copy_layout_import_and_network_version` |
 | Collector pages, permanent IDs, repeated cursor, ended/unrelated/unknown-viewer YouTube exclusion | `Collectors.test_twitch_pages_permanent_ids_and_repeated_cursor`, `test_youtube_pages_live_game_and_unknown_audience` |
 | Timeout (including token refresh), quota and 429, failure freshness and recovery | `Collectors.test_http_timeout_including_discord_and_token_refresh`, `test_rate_limit_headers_and_bad_response_do_not_become_success`, `Runtime.test_real_poll_success_failure_recovery_and_quota_backoff` |

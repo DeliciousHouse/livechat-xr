@@ -21,10 +21,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Linux deployment guards and loopback probe
-        run: python -m unittest discover -s tests -p test_deploy.py -v
       - name: Discovery dependencies
         run: pip install PyNaCl==1.6.0
+      - name: Linux deployment guards and loopback probe
+        run: python -m unittest discover -s tests -p test_deploy.py -v
       - name: Linux discovery and hosted chat isolation
         run: python -m unittest tests.test_network tests.test_discord_delivery -v
 
