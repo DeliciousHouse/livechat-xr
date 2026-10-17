@@ -6,6 +6,14 @@ Repo: DeliciousHouse/livechat-xr
 Status: APPROVED
 Mode: Startup
 
+> **Stage 1 source-gate evidence, 2026-10-17:** [research findings and terms
+> matrix](vr-live-network-stage1-gates.md) supplement this historical plan.
+> F1 is **not passed** (no safe incremental quota allocation/24-hour run);
+> O6 is **unresolved** (authorized owner-room probe offline, no observed Pop1
+> game field/value); platform terms review found unresolved display, derived
+> metric and retention constraints. Plan approval is not public activation
+> clearance. TikTok public listings remain excluded pending an explicit contract.
+
 ## Problem Statement
 
 Small VR streamers (1-10 viewers) can't get found. They multistream the same session to TikTok, Twitch and YouTube, and every existing discovery tool is single-platform and built for bigger channels. LiveChat XR's original pitch, chat inside the headset, is being covered by BeamXR and Meta (roadmap Gate 1 failed on the BeamXR verdict "they will ship this soon - partner or get out"), so the product needs a problem streamers actually feel.
@@ -31,7 +39,7 @@ Small VR streamers (1-10 viewers) can't get found. They multistream the same ses
 ## Constraints
 
 - The census runs on capped budgets: TikTok's daily request budget is used up, and the Apify actor is at its $5 monthly cap. Coverage of TikTok is incomplete.
-- YouTube Data API live search costs 100 quota units per call against a 10,000-unit daily default, so about 100 live searches a day.
+- YouTube's current official quota docs (updated 2026-10-15) give `search.list` its own default 100-calls/day bucket at 1/call; `videos.list` costs 1 from the other-endpoints 10,000-units/day bucket. These are documented defaults, not verified project allocations. See [F1 evidence](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement); pagination, retries and shared consumers must fit too.
 - A public directory built from platform data raises terms-of-service questions; official APIs exist for Twitch (Helix) and YouTube (Data API with quota), not for TikTok LIVE discovery.
 - The founder's clip pipeline is his own and not a product for others.
 - The chat relay stays free with donations.
@@ -74,7 +82,7 @@ An independent Codex cold read (gpt-6-astra) steelmanned the product as helping 
 - **Stage 0 (hand-posted, one community Discord):** the founder copies the list by hand at post time from the public Population: ONE pages on Twitch (the category directory) and YouTube (a live search for the game title, which misses streams that don't name the game), plus opted-in relay streamers on TikTok. No API output is posted in Stage 0. Every post ends with "reply or DM to be removed".
 - **Stage 1 onward (bot and any page):** **opt-in only.** A streamer must opt in to be listed at all. Reasoning: an automated, persistent public aggregate of 1-10-viewer streams is new exposure the platforms don't provide, and Population: ONE has young players.
 - **Minors:** never list a channel whose title, bio or stream states or suggests the streamer is under 18. When unsure, leave them out. In Stage 0 the founder checks this while copying each entry. From Stage 1, every new opt-in is held until the founder or relay-ops reviews the channel for age signals, within 24 hours, and any report triggers a re-review before the next update.
-- **Platform terms:** before Stage 1 ships, read the Twitch Developer Agreement and the YouTube API Services Terms and Developer Policies for display, caching and retention rules, and keep only current live status plus handle, game, platform, viewer count and link in the public list. TikTok entries come only from opted-in relay streamers, never from scraping, in anything public.
+- **Platform terms:** [2026-10-17 review](vr-live-network-stage1-gates.md#terms-matrix) is performed, not cleared: Twitch sharing/commingling/storage permission, YouTube derived cross-platform maximum and aggregation, attribution, deletion/retention and project/quota constraints remain unresolved. Current live status plus handle, game, platform, viewer count and link is not an exemption. No public aggregate until those constraints are resolved; TikTok public entries stay excluded pending O6, never inferred from connectivity or title matching.
 
 ### Opt-in, opt-out and removal
 
@@ -90,7 +98,7 @@ An independent Codex cold read (gpt-6-astra) steelmanned the product as helping 
 
 - **Stage 0 runs before the collectors move.** Its list is copied by hand from the public pages at post time, so it is as fresh as the moment it's posted.
 - **Collectors move to Dora for Stage 1:** the census collectors run as a cron on Dora with the Twitch and YouTube keys in Dora's env file, writing `census.db` there. The bot reads it read-only. Owner: the relay-ops role.
-- **Cadence for one game:** Twitch Helix every 5 minutes (all four tracked games can stay on Twitch, which is cheap); YouTube live search every 15 minutes for Population: ONE only, with the other three games paused on YouTube (96 calls a day, 9,600 of 10,000 units [estimated]). The census already hit YouTube's quota limit (HTTP 429) during its 2026-10-16 validation, so Stage 1 cannot start until a re-measure shows Pop1-only polling stays under quota, or a separate API project or quota increase is in place; TikTok from the relay's own live status for opted-in relay streamers, in real time. The exact TikTok live-presence contract (reconnects, missing viewer counts, how a stream is confirmed as Pop1) is still open: first check whether TikTok room data exposes a game tag (O6, D22 answer C).
+- **Cadence for one game (proposed, not activated):** Twitch Helix every 5 minutes; YouTube Pop1-only every 15 minutes is still gated by F1. The existing three-keyword collector would need at least 288 searches/day; a hypothetical one-query/one-page version needs 96 from the documented default 100-search bucket, before shared workloads, pages or retries. Read-only existing coverage counted 70 completed search pages in the prior Pacific day. No additional polling or existing-job pause was performed; no actual project allocation or 24-hour experiment is claimed. See [F1 safety evidence](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement). Establish an approved shared reserve and measure the final candidate, or request a quota extension/audit; do not shard the same API client across projects to bypass quota. TikTok public presence stays excluded: the authorized owner-room probe was offline, so no Pop1 game path/value was observed and O6/D22 remains unresolved. Reconnect, unknown counts and stale-evidence semantics still require an explicit contract.
 - **Freshness rule:** entries seen in the last 15 minutes show normally; 15-30 minutes old show "last seen N min ago"; older than 30 minutes are hidden. The bot re-edits its single live-list message every 5 minutes from 6pm to 11pm US Pacific, so no posted list is ever older than 5 minutes; outside that window the message reads "Updates 6-11pm PT" (D12). `/live` answers and similar-size DMs work at all hours (D13).
 - **Adding games** needs more YouTube quota (a quota increase request) or fewer YouTube checks per game. That's a Stage 2 decision.
 
@@ -146,7 +154,7 @@ An independent Codex cold read (gpt-6-astra) steelmanned the product as helping 
 - Relay manage-page opt-in box and live-status export for TikTok.
 - A Spotlight Stripe payment link plus a new webhook branch and listing record type.
 - A "Link Discord" (OAuth `identify`) step on the relay manage page.
-- A YouTube quota re-measure for Pop1-only polling, or a separate API project, before Stage 1.
+- A safe Pop1-only YouTube 24-hour quota re-measure after actual project allocation/shared reserve is established, or an approved quota extension; no same-client project sharding. F1 remains unpassed on the [2026-10-17 safety evidence](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement).
 - BeamXR partnership outreach is unblocked by the threat verdict and could pair with this (they want TikTok coverage).
 
 ## The Assignment
@@ -495,7 +503,7 @@ Mode: SCOPE EXPANSION. Depth: strategy-only. Working plan: this file. Approved d
 | X3 best-time hint (founder) | Census holds per-hour live counts per game (`census.db` sightings) | not in plan | Bot tells each opted-in streamer the hours with fewest small Pop1 streams | deferred | D4 answer A, then D23 answer A: deferred to TODOS.md |
 | X4 viewer game-follow (founder) | No tool pings viewers for small streams of one game | not in plan | Viewers `/follow pop1` and get a ping when any opted-in small Pop1 streamer goes live | approved | D5 answer A, 2026-10-16: viewer game-follow Discord role with capped pings, Stage 1 |
 | X5 post-stream recap (founder) | Relay timeline log per post (PR #24) and session summary exist | approach A rejected | After each stream: raids and follows attributed via list links, plus chat-burst clip moments | deferred | D6 answer B, 2026-10-16: defer to TODOS.md until Stage 1 shows raids |
-| F1 YouTube quota claim | Census hit YouTube HTTP 429 quota on 2026-10-16 validation (`vr-census-tool/completeness-report.txt`) | "96 calls/day within quota" | re-measure before Stage 1 gate | approved | D9 answer A (RC repair 5): quota re-measure is a Stage 1 entry gate |
+| F1 YouTube quota claim | Census hit YouTube HTTP 429 quota on 2026-10-16 validation (`vr-census-tool/completeness-report.txt`); [2026-10-17 safety evidence](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement): separate 100-search default bucket, shared workload, no safe incremental reserve established | "96 calls/day within quota" remains unverified | re-measure before Stage 1 gate; NOT passed, no added polling | approved gate, not acceptance | D9 answer A retained; current cost model supersedes historical 9,600-unit arithmetic; no same-client quota sharding |
 | F2 Stripe reuse claim | Webhook only upgrades relay tokens (`server/server.py:1034`, `:920`) | "existing webhook marks Spotlight" | new handler branch + listing record type | approved | D9 answer A (RC repair 5): new webhook branch and listing record type |
 
 ## currentDecision (O7)
@@ -572,7 +580,7 @@ Feasibility blockers before Stage 1 (not Stage 0): YouTube quota re-measure (F1)
 | O3 isolation and squad sequencing (founder) | X2 and X4 ship inside the core window; squad-up after earliest stop | D11 ordering | pending | approved | D20 answer A, 2026-10-16 (reopens D11 on outside finding 3): additions start after the core's 2-week decision, week N from the decision date; Stage 0 evenings 2-3 add 2-3 hand-made squad introductions counted by who played together |
 | O4 Stage 0 inventory vs opt-in (founder) | Stage 0 lists non-enrolled streamers; Stage 1 is opt-in only | none | pending | approved | D21 answer A, 2026-10-16: during Stage 0 ask every listed streamer to opt in; Stage 1 starts only after at least 5 opted-in Pop1 streamers are live together once in a 6-11pm PT window |
 | O5 deploy path (eng owner) | `deploy.py` builds one relay container, one mount; backup pauses relay only (`server/deploy.py:87`, `:134`, `:193`) | "same deploy path" | factual correction: explicit bot deploy, shared storage and consistent backup design required in /plan-eng-review | approved | factual correction, no behavior change |
-| O6 TikTok live-presence contract (founder) | Reconnects re-notify, counts drop on disconnect, hosted relay passes no viewer callback, no TikTok game signal (`app/chat.py:556`, `:775`; `server/server.py:468`) | relay "connected" status | pending | unresolved | D22 answer C, 2026-10-16: investigate whether TikTok room data exposes a game tag before choosing the live-presence contract; owner: implementation, verify before Stage 1 TikTok listings |
+| O6 TikTok live-presence contract (founder) | Reconnects re-notify, counts become unknown on disconnect, hosted relay passes no viewer callback (`app/chat.py:556`, `:775`; `server/server.py:468`); [7.0.1 inspection and authorized offline probe, 2026-10-17](vr-live-network-stage1-gates.md#o6-library-capability-versus-observed-data) yield no observed Pop1 game field/value | relay "connected" status is not game proof; protobuf capability is not observed room data | pending explicit game/presence contract; public TikTok listings excluded | unresolved, not a negative game-tag finding | D22 answer C retained; a live authorized sample and a new contract decision are still required; no runtime behavior changed |
 | O7 best-time measures supply (founder) | Fewer streams may mean fewer viewers; metric measures compliance | D4 approved | pending | approved | D23 answer A, 2026-10-16 (reopens D4 on outside finding 7): best-time hint deferred to TODOS.md until viewer-ping clicks by hour exist |
 
 ## CEO Review: sections, registries and outputs (2026-10-16, strategy depth)
@@ -726,11 +734,11 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [ ] **T2 (P1, human: ~2h / CC: ~30min)** — collectors — Re-measure YouTube quota for Pop1-only polling (F1)
   - Surfaced by: Section 7, census HTTP 429 on 2026-10-16
   - Files: to be determined
-  - Verify: 24h of Pop1-only polling stays under 10,000 units
+  - Verify: a genuine elapsed 24h final-candidate ledger fits the effective Search Queries allocation plus the separate other-endpoint budget, including shared consumers, pages/retries/failures and Pacific resets. [Safety preflight](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement) could not allocate a safe run; F1 stays unpassed, not queued or estimated passed.
 - [ ] **T3 (P1, human: ~1h / CC: ~15min)** — relay — Check whether TikTok room data exposes a game tag (O6)
   - Surfaced by: Outside voice finding 6, D22 answer C
   - Files: to be determined
-  - Verify: room info from a live Pop1 TikTok stream inspected; contract chosen through a new decision
+  - Verify: room info from a live authorized Pop1 TikTok stream inspected; contract chosen through a new decision. [2026-10-17 probe](vr-live-network-stage1-gates.md#o6-library-capability-versus-observed-data) was offline/inconclusive; no observed game field/value, O6 remains unresolved and public TikTok listings excluded.
 - [ ] **T4 (P1, human: ~4h / CC: ~30min)** — ops — Alert the founder when the collectors go stale
   - Surfaced by: Section 8 CRITICAL GAP
   - Files: to be determined
@@ -746,7 +754,7 @@ Synthesized from this review's findings. Each task derives from a specific findi
 - [ ] **T7 (P2, human: ~3h / CC: ~1h)** — compliance — Read Twitch and YouTube API terms for display and retention
   - Surfaced by: Section 3 and safety rules
   - Files: none
-  - Verify: findings noted in the plan before Stage 1
+  - Verify: [authoritative sections and terms matrix recorded 2026-10-17](vr-live-network-stage1-gates.md#terms-matrix); review performed, not legal/platform clearance. Resolve identified display/derived-metric/retention/project constraints before public activation; historical plan approval does not waive them.
 
 ### Completion Summary
 ```
