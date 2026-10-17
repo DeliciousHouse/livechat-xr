@@ -1,0 +1,7 @@
+# TODOS
+
+## VR Live network
+
+- **Post-stream recap (deferred 2026-10-16, /plan-ceo-review D6).** After each stream, post to the streamer's Discord the raids and follows tied to the network (via the list's short links) plus the two chat-burst moments worth clipping. Reuses the relay's per-post timeline log (PR #24) and end-of-stream summary. Revisit when Stage 1 shows organic raids happening. Design: `docs/designs/vr-live-network.md`.
+- **Relay uptime check from outside (added 2026-10-17, /plan-eng-review D8, P3, effort S).** A Hermes cron on the PC fetches the relay's home page every 5 minutes, Telegrams Brendan after 2 misses, and once on recovery. Why: the E1 staleness DM comes from the bot inside the relay, so a relay or Dora outage can't alert anyone, and no Hermes script checks the relay today. Con: goes quiet when the PC is off. Start in hermes `scripts/` next to the stream monitor. Depends on: nothing; pick up after the Stage 1 core ships.
+- **Best-time hint (deferred 2026-10-16, /plan-ceo-review D23, reopening D4).** Weekly DM telling each opted-in streamer the quietest and busiest hours for small Pop1 streams. Deferred because hourly streamer counts measure supply, not viewers, and following the advice proves compliance, not benefit. Revisit once viewer-ping clicks by hour (X4) show when viewers actually come; data limits from D9/D13 still apply (hourly counts only, Twitch, YouTube and opted-in relay TikTok, 6-11pm PT window, timezone from `/profile`).
