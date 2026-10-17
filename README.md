@@ -41,6 +41,12 @@ new line. This works even with the ask turned off. Details: [reference](docs/ref
 
 ## Documentation
 
+Private Pop1 discovery foundation is opt-in server configuration, not a public launch. It adds
+Twitch/YouTube collectors and signed Discord interactions alongside (not instead of) hosted chat.
+Only `/network-status` is registered in the configured test guild; listing setup and `/optin` are not
+available yet. Missing discovery configuration leaves chat running unchanged. See the
+[runtime contract and runnable coverage ledger](docs/network-foundation.md) for scope and rollback.
+
 | Document | Use it for |
 |---|---|
 | [User guide and FAQ](docs/user-guide.md) | Illustrated first runs, webhook setup, name correction, billing, cancellation and troubleshooting |
