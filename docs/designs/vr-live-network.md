@@ -1263,6 +1263,31 @@ STEP | USER DOES                          | USER FEELS                 | PLAN SP
 - **DR6C, contrast on new web pieces (answer 6C-A, 2026-10-17):** measured: `text-faint` 3.5:1 and `placeholder` 2.8:1 on `{colors.surface}`, `line-field` 1.4:1. Muted steps and hints use `{colors.text-label}` (6.4:1); labels stay visible above inputs; inputs get a 2px `{colors.text-faint}` border (3.5:1, above the 3:1 non-text minimum); controls at least 44px tall; `{colors.focus}` ring (4.3:1) on every focusable element; errors sit under their field. Applies to the DR1D section and the DR5A panel.
 - **DR7A, go-live alert timing (answer 7A-B, 2026-10-17):** keep D13: alerts at any hour, no daily cap, for every opted-in streamer who turns them on (free per DR1B). Known risk recorded: night pings and busy-night floods may push streamers to block the bot.
 - **DR7B, "about your size" offline (answer 7B-A, 2026-10-17):** if live, current viewers; if not, the peak viewers of the most recent stream (stored on the listing); with no stream recorded yet, 0-2 (covering 0-4 under D13).
+- **DR8, platform-terms design changes (Brendan: "ok do the design changes then", 2026-10-17 15:00 PDT; option 1 after the Stage 1 terms review in PR #35, `docs/designs/vr-live-network-stage1-gates.md`).** This decision supersedes DR1A, D17, D13 and DR7B where they conflict. It is a product design meant to stay inside the Twitch Developer Agreement and the YouTube API policies as read in that review; it is not legal sign-off.
+  - **Per-platform counts, no blended number:**
+    - Each row shows each platform's own count and label: `**Brendan** · Twitch 4 · TikTok 2 · [Watch on Twitch](…) · [Watch on TikTok](…)`.
+    - No cross-platform maximum, sum or other combined viewer number is shown, stored or used. This replaces D17's "highest single-platform count".
+  - **Sort, "small" and matching use one raw source count:**
+    - The listing's **primary count** is the count of its first live platform, in this order: Twitch, then YouTube, then TikTok.
+    - It is never derived from several platforms.
+    - It drives fewest-first ordering, the ≤10 "small" rule, similar-size matching (D13) and "about your size" (DR7B).
+  - **Branding and links:**
+    - Each platform link reads `Watch on Twitch` / `Watch on YouTube` / `Watch on TikTok`, so the platform name is the clickable link text.
+    - Each link resolves straight to that platform's own live page: the Twitch channel, the YouTube live video, or the TikTok LIVE.
+    - To keep the E6 visit counts, links go through the relay's own redirect, `https://livechat.deliciouswines.org/go/<id>`. It counts one visit and returns a 302 to the platform URL, with no interstitial page. This replaces the third-party link shortener, so the destination is always the named platform's own page.
+    - The footer adds `Live data from Twitch, YouTube and TikTok · not affiliated`.
+  - **Live data is ephemeral:**
+    - Platform data includes viewer counts, titles and live status.
+    - It lives only in memory or in a `live_streams` table. Rows are overwritten each poll and deleted when a stream ends or is older than 24 hours.
+    - That table is excluded from the E2 snapshot and nightly backups. Backups hold only listing records the streamer supplied: handles, Discord ID, in-game name, timezone, review status, opt-in and "I'd pay" flags.
+    - DR7B's "last stream peak" is kept for at most 24 hours. After that, the listing counts as having no stream recorded (0-2).
+  - **Deletion on opt-out or removal:** within the DR2E immediate edit, delete the listing's platform data at once. Delete the listing record itself within 7 days, unless the streamer opts back in.
+  - **Freshness labels stay per source:** DR2A/DR2B already handle this. The evidence time is the source poll time, not the message edit time.
+  - **Public pages for the YouTube quota audit (card t_90e00261):**
+    - Add `/terms` to the relay.
+    - Extend `/privacy` to cover the network. It must say what is collected, the 24-hour live-data limit, the 7-day deletion and how to opt out, and link Google's privacy policy and the YouTube Terms of Service.
+    - Both pages use the existing relay page layout (DESIGN.md).
+  - **Open, not built:** Twitch Developer Agreement VI.C restricts sharing API data with third parties without written permission. The launch accepts this risk (Brendan, option 1). There is no outreach to Twitch unless he asks.
 ```
 LIVE-LIST MESSAGE (DR1A)                MANAGE PAGE (DR1D)
 **Pop1 Live** · 4 small streams live    [relay controls: status / test / stop]
@@ -1277,6 +1302,7 @@ LIVE-LIST MESSAGE (DR1A)                MANAGE PAGE (DR1D)
 ```
 
 ### Design effect on engineering tasks
+- DR8 (platform terms) changes T8/T10 (per-platform counts, primary count, ephemeral `live_streams` table excluded from backups, deletion on opt-out), T12 (snapshot scope), T18 (row format, links, footer), T22 (privacy/terms pages) and adds a relay `/go/<id>` counting redirect.
 - T15 (Spotlight webhook dedupe) and the Spotlight webhook branch wait for the DR1B-gates payment trigger; nothing is sold at launch.
 - T11's E1/E5 banners are built as the single DR5A incident panel, with per-source staleness (DR2B).
 - T8's list poster renders DR1A/DR2A/DR6A; T9's interaction route serves the DR2D auto-check reply and DR3C confirmations.
