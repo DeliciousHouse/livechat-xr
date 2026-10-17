@@ -38,6 +38,41 @@ The relay uses Python's threaded HTTP server and one asyncio loop for stream con
 
 A small JSON store avoids a database service. Atomic file replacement avoids partial files, but this is a single-process design: do not run multiple replicas against one volume. Discord chat posts preserve arrival order in chunks of up to five lines and 2000 UTF-16 units. Failed posts retry (429 honors Retry-After); attempts are capped at 25 per rolling minute. Only unsent backlog older than 60 seconds is summarized as `+N earlier messages`. The PC banner retains its independent three-line limit and `+N more` summary. Queues are in memory, not a durable chat archive.
 
+## Private discovery: D1, one process and one volume
+
+`server/network.py` is one `Network` on the existing relay asyncio loop, not a
+second bot container or a census cron. Threaded HTTP verifies Discord signatures,
+ACKs immediately and schedules async follow-up; collector/Discord HTTP and SQLite
+work run off-loop with bounded network timeouts. Hosted chat keeps its existing
+per-registration queues. `server/deploy.py` is unchanged.
+
+```text
+Discord interactions -> HTTP thread -> Ed25519 / private scope -> relay asyncio loop
+Twitch / YouTube APIs -> to_thread -> complete poll -> /data/listings.db
+                                                     | durable: listings + supplied_channels
+                                                     | ephemeral: channels + live_streams
+                                                     | process memory: per-channel peaks
+relay loop -> source incident state -> /admin panel + one founder DM per transition
+listings.db -> SQLite backup temporary copy -> sanitize / VACUUM / integrity + FK
+            -> atomic listings.snapshot.db -> nightly archive (JSON/logs preserved)
+stopped restore -> expiry -> unbound listings -> fresh ownership proof before rebind
+```
+
+Schema version 1 migrates local foundation `presence` transactionally, preserving
+consent/review and marking old collector identities unverified. It never invents
+supplied handles. Only an authenticated ownership-verification flow may record a
+streamer-supplied handle or rebind its platform identity. Restored consent/review
+alone cannot make a public entry. Removal deletes platform rows/bindings and
+memory peaks immediately; removed listings expire at seven days. Collector data
+and peaks expire within 24 hours; a completed empty poll removes current live
+rows immediately. Counts remain separate, and unknown current primary counts
+cannot use secondary counts or peak fallback.
+
+This is repository implementation, not public activation, quota/terms clearance
+or installed backup proof. Full list/ownership/manage UX belongs to the surfaces
+lane; TikTok presence and T15 payments remain excluded. See [the core contract and
+test ledger](network-operations.md) and [operational limits](operations.md#discovery-backup-and-restore).
+
 ## Identity and payment
 
 A private manage token is the access credential, not an account password. The webhook identifies an existing registration when updating it. Google optionally verifies name/email; manually entered email is not verified. Discord authorization can create the channel webhook instead of requiring manual copying.

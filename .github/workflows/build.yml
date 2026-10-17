@@ -22,11 +22,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Discovery dependencies
-        run: pip install PyNaCl==1.6.0
+        run: pip install PyNaCl==1.6.0 tzdata==2026.5
       - name: Linux deployment guards and loopback probe
         run: python -m unittest discover -s tests -p test_deploy.py -v
       - name: Linux discovery and hosted chat isolation
-        run: python -m unittest tests.test_network tests.test_discord_delivery -v
+        run: python -m unittest tests.test_network tests.test_network_operations tests.test_network_backup tests.test_discord_delivery -v
 
   build:
     name: windows-build
@@ -48,7 +48,7 @@ jobs:
           cache-dependency-path: app/requirements.txt
 
       - name: Install dependencies
-        run: pip install -r app/requirements.txt pyinstaller==6.* PyNaCl==1.6.0
+        run: pip install -r app/requirements.txt pyinstaller==6.* PyNaCl==1.6.0 tzdata==2026.5
 
       - name: Tests
         run: python -m unittest discover -s tests -v

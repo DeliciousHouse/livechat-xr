@@ -22,15 +22,16 @@ Collector traversal is adapted from the located `vr-census-tool/census/twitch.py
 
 ## Storage and follow-on seam
 
-Each operation opens/closes its own SQLite connection; writes are transactional, with WAL and foreign keys enabled. Initialization is repeatable `CREATE TABLE IF NOT EXISTS`, not a production migration.
+Each operation opens/closes its own SQLite connection; writes are transactional, with WAL and foreign keys enabled. T11/T12/T17 now supplies a versioned local migration and strict DR8 lifecycle; [the core API contract](network-operations.md) supersedes the original foundation schema. No production migration was executed.
 
-- `listings`: stable integer `id`, `discord_id`, `opted_in`, `review_status` (`pending`, `reviewed`, `removed`), `dm_closed`.
-- `channels`: stable integer `id`, `listing_id`, `platform`, permanent `platform_id`, current `handle`; unique `(platform, platform_id)`.
-- `presence`: keyed by `channel_id`, stream ID/title/viewer count/game/last seen/live flag.
+- `listings`: integer `id`, `discord_id`, `opted_in`, `review_status` (`pending`, `reviewed`, `removed`), `dm_closed`, `removed_at`.
+- `supplied_channels`: verified streamer-supplied handles only; durable, never inferred from collector identity or listing flags.
+- `channels`: ephemeral collector identity, last observation and explicit `verified` binding flag; unique `(platform, platform_id)`.
+- `live_streams`: ephemeral channel/stream/title/raw viewer count/game/last seen/live flag; replaces `presence` in schema version 1.
 
-`Store.upsert_presence(platform, rows, now)` is for complete polls only. New discoveries start pending and not opted in. It updates presence/handles, never consent, review, ownership or DM flags. A channel-ID-only YouTube poll preserves an already resolved handle. `Store.set_listing(id, **fields)` is an internal trusted state API, not an authorization boundary: the surfaces lane must verify ownership/reviewer authorization before calling it or grouping channels under a listing. `listing`, `channels` and `discovery` return detached dictionaries. `discovery(now)` excludes unconsented, pending, removed, unknown/over-ten-viewer and older-than-thirty-minute presence. It returns channel rows; the surfaces lane owns grouping/rendering and cross-platform eligibility policy.
+`Store.upsert_presence(platform, rows, now)` retains its caller signature but writes `live_streams`. Complete polls never change consent/review or supplied handles. New discoveries are pending, unconsented and unverified. `set_listing` is trusted-only, not authorization; removal clears platform data and re-opt-in returns to pending review. `live_channels(now)` returns verified/consenting live rows with raw counts, including unknown. `discovery(now)` chooses the first live primary (Twitch then YouTube) before filtering Pop1/known 0–10 audience, never a cross-platform sum/max or secondary-count fallback. See the strict contract for fresh rebinding after restore.
 
-`Network.snapshot()` returns detached `enabled`, missing-name list, sanitized startup error and per-source `{last_success, error, success_streak}`. No-success starts at zero; failure resets the streak but preserves last-success. T11 owns incident timing/window/recovery and presentation, using this same runtime state. `Store.dm_closed_count()` provides persisted closed-DM state to the admin caller (offload it when called from the loop).
+`Network.snapshot()` returns detached `enabled`, missing-name list, sanitized startup error and per-source `{last_success, error, success_streak, delayed, incident_since}`. No-success starts at zero; failure resets the streak but preserves last-success. T11 incident timing/window/recovery and admin presentation use this same state. `Store.dm_closed_count()` provides persisted closed-DM state to the admin caller (offload it when called from the loop).
 
 `Network.discord` retries 429 at most three times using nonblocking waits. `send_dm(listing_id, text)` prefixes Pop1 Live, persists Discord 50007 and suppresses subsequent automatic attempts for that listing, including after restart. Other failures propagate to the owning task's sanitized handler. `message(text)` escapes markdown and neutralizes mentions, always supplies `allowed_mentions`. Its optional `viewer_role` is reserved for a later explicit, configured viewer-role send; no active command/list/ping calls it. No arbitrary user/role/everyone mentions are permitted.
 
@@ -63,8 +64,7 @@ CI adds these network/delivery tests to the existing Ubuntu relay lane and pins 
 
 ## Explicitly deferred
 
-- T11/E1/E5: timed incidents, recovery notifications, admin presentation (follow-on core card).
-- T12/E2 and T17: online snapshot/restore, deployment/architecture reconciliation (follow-on core card).
+- T11/E1/E5, T12/E2 and T17 are implemented in the [core operations handoff](network-operations.md); live installation/restore proof remains Dora's lane.
 - Surfaces: `/optin` ownership auto-check, list renderer/poster, immediate removal edits, manage/profile UX, review flow and demand taps. The foundation does not claim these exist.
 - T14 owner-comment hook: independent lane; app/chat.py and its tests are untouched here.
 - O6 TikTok presence, squad/follow/public ping features and T15/payment: deferred, not covered or activated.
