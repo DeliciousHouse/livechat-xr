@@ -57,7 +57,7 @@ Use a private Discord server and a text channel such as `stream-chat`. If you ar
 
 ### Step 2: Connect your channel
 
-Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Enter your TikTok handle, your Twitch channel, your YouTube handle, or any mix: chat from all of them lands in the same Discord channel. Here, unlike the PC app, a full TikTok/Twitch/YouTube profile URL is also accepted (a `/live` URL works too); leading `@` is optional.
+Open [LiveChat XR](https://livechat.deliciouswines.org/) in your browser. Type your name and email, or choose **Continue with Google** if shown. Typing an email is a contact field, not an email login; no verification link is sent. Enter your TikTok handle, your Twitch channel, your YouTube handle, or any mix: chat from all of them lands in the same Discord channel. Here, unlike the PC app, a full TikTok/Twitch/YouTube profile URL is also accepted (a `/live` URL works too, and `https://` is optional); leading `@` is optional. For YouTube you can also paste any link to your channel or one of your videos: a live or watch link, `youtu.be`, shorts, `/channel/UC…`, `/c/` or `/user/` links are all turned into your channel's @handle when you save.
 
 ![Public relay signup page, empty fields](images/relay-signup.png)
 

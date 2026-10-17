@@ -201,18 +201,62 @@ def same_channels(a: dict, b: dict) -> bool:
     return bool(norm(a) & norm(b))
 
 
+HOSTS = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
+         "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv"),
+         "youtube": ("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com")}
+
+
+def youtube_owner_handle(url: urllib.parse.ParseResult) -> str | None:
+    """Any YouTube link that isn't a /@handle link (video, live, shorts, youtu.be, /channel/UC..., /c/, /user/) ->
+    the owning channel's current @handle, read from YouTube's own pages. None when it can't be resolved."""
+    parts = [x for x in url.path.split("/") if x]
+    cid = None
+    if url.hostname == "youtu.be" and parts:
+        video = parts[0]
+    elif parts[:1] == ["watch"]:
+        video = parse_qs(url.query).get("v", [""])[0]
+    elif parts[:1] in (["live"], ["shorts"]) and len(parts) > 1:
+        video = parts[1]
+    else:
+        video = ""
+        if parts[:1] == ["channel"] and len(parts) > 1 and re.fullmatch(r"UC[\w-]{22}", parts[1]):
+            cid = parts[1]
+        elif parts[:1] in (["c"], ["user"]) and len(parts) > 1:
+            m = re.search(r'"externalId":"(UC[\w-]{22})"', chat._yt_get(f"https://www.youtube.com/{parts[0]}/{quote(parts[1])}"))
+            cid = m[1] if m else None
+    if video:
+        if not re.fullmatch(r"[\w-]{6,20}", video):
+            return None
+        page = chat._yt_get(f"https://www.youtube.com/watch?v={video}")
+        m = re.search(r'"ownerProfileUrl":"https?://www\.youtube\.com/(@[\w.-]{3,30})"', page)  # the video's own channel
+        if m:
+            return m[1]
+        m = re.search(r'"externalChannelId":"(UC[\w-]{22})"', page)
+        cid = m[1] if m else None
+    if not cid:
+        return None
+    found = chat.resolve_identity("youtube", "", {"id": cid}) or {}
+    return found["handle"] if str(found.get("handle", "")).startswith("@") else None
+
+
 def normalise_channel(platform: str, channel: str) -> str:
     channel = channel.strip()
+    if re.match(r"(?i)(?:www\.|m\.)?(?:tiktok\.com|twitch\.tv|youtube\.com|youtu\.be)/", channel):
+        channel = "https://" + channel  # pasted without the scheme
     if channel.startswith(("https://", "http://")):
         try:
             url = urllib.parse.urlparse(channel)
         except ValueError:
             return channel  # malformed URLs fail the existing channel syntax check
-        hosts = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
-                 "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv"),
-                 "youtube": ("youtube.com", "www.youtube.com", "m.youtube.com")}
-        if url.hostname in hosts.get(platform, ()):
-            channel = url.path.strip("/").split("/")[0]  # also drops a trailing /live
+        if url.hostname in HOSTS.get(platform, ()):
+            first = url.path.strip("/").split("/")[0]
+            if platform == "youtube" and not first.startswith("@"):
+                try:
+                    return youtube_owner_handle(url) or channel  # unresolved links fail the syntax check
+                except Exception as e:
+                    log.warning("youtube link lookup: %s", type(e).__name__)
+                    return channel
+            channel = first  # also drops a trailing /live
     if platform in ("tiktok", "youtube"):
         return "@" + channel.lstrip("@")
     return channel.lstrip("@#").lower()
@@ -610,7 +654,7 @@ Mike: GG
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="twitch">Twitch channel</label><input type="text" id="twitch" name="twitch" value="{twitch}" placeholder="yourchannel or twitch.tv URL"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
-<label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle or youtube.com URL"
+<label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle, channel link or live link"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <div class="hint">{channels_hint}</div>
 {google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
