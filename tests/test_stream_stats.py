@@ -7,8 +7,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tools")]
+sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tools"), str(ROOT / "tests")]
+from relay_sync import session_writes
 import chat
 import qa_relay
 
@@ -23,7 +25,7 @@ class StreamStats(unittest.TestCase):
                     posts, intros = [], []
 
                     async def go():
-                        delivered, finished = asyncio.Queue(), asyncio.Event()
+                        delivered, summaries, finished = asyncio.Queue(), asyncio.Queue(), asyncio.Event()
 
                         async def source(channel, emit, status, *args, tally=None, **kwargs):
                             assert tally is not None
@@ -42,7 +44,8 @@ class StreamStats(unittest.TestCase):
                             tally.comment("three")
                             status(f"{platform}: qa went offline, waiting")
                             emit("x" * 2000)
-                            await delivered.get()
+                            for _ in range(2 if plan in ("free", "founder") else 1):
+                                await delivered.get()
                             status(f"{platform}: connected to qa")
                             tally.comment("four")
                             status(f"{platform}: retrying (TimeoutError)")
@@ -60,25 +63,25 @@ class StreamStats(unittest.TestCase):
 
                         def post(url, text, **kwargs):
                             posts.append(text)
-                            if not text.startswith("Stream ended"):
-                                asyncio_loop.call_soon_threadsafe(delivered.put_nowait, None)
-
-                        def thread(target, args, **kwargs):
-                            return mock.Mock(start=lambda: target(*args))
+                            queue = summaries if text.startswith("Stream ended") else delivered
+                            asyncio_loop.call_soon_threadsafe(queue.put_nowait, None)
+                            return True
 
                         qa_relay.server.regs["qa"] = dict(platform=platform, channel="qa", plan=plan, platform_icons=False,
                                                          webhook=qa_relay.HOOKS["fixture-one"])
                         asyncio_loop = asyncio.get_running_loop()
                         with mock.patch.object(chat, platform, source), mock.patch.object(chat, "relay", fast_relay), \
-                                mock.patch.object(chat, "post_discord", side_effect=post):
+                                mock.patch.object(chat, "post_discord", side_effect=post), session_writes() as writers:
                             task = asyncio.create_task(qa_relay.server.run("qa"))
                             try:
                                 await asyncio.wait_for(finished.wait(), 2)
-                                await asyncio.sleep(.03)
+                                for _ in range(2):
+                                    await asyncio.wait_for(summaries.get(), 2)
                             finally:
                                 task.cancel()
                                 with self.assertRaises(asyncio.CancelledError):
                                     await task
+                        self.assertEqual(len(writers), 2)
 
                     asyncio.run(go())
                     rows = [json.loads(line) for line in (qa_relay.server.DATA / "sessions.jsonl").read_text().splitlines()]
@@ -168,42 +171,72 @@ class StreamStats(unittest.TestCase):
             self.assertIn("stream stats persistence failed", "\n".join(logs.output))
 
     def test_relay_persists_and_posts_once_per_offline_connection(self):
-        posted = threading.Event()
+        relay = chat.relay
+        posts = []
         async def fake_tiktok(user, emit, status, key="", ask=None, tally=None, **kwargs):
             assert tally is not None
-            status("TikTok: connected to @qa")
-            tally.comment("one")
-            tally.comment("one")
-            tally.comment("two")
-            tally.gifts += 5
-            tally.followers.update(["one", "one"])
-            tally.peak = 9
-            emit("One: hello")
-            status("TikTok: @qa went offline, waiting")
-            status("TikTok: @qa went offline, waiting")
+            for _ in range(2):
+                status("TikTok: connected to @qa")
+                tally.comment("one")
+                tally.comment("one")
+                tally.comment("two")
+                tally.gifts += 5
+                tally.followers.update(["one", "one"])
+                tally.peak = 9
+                emit("One: hello")
+                status("TikTok: @qa went offline, waiting")
+                status("TikTok: @qa went offline, waiting")
+                await delivered.get()
+            finished.set()
             await asyncio.Event().wait()
 
+        async def fast_relay(*args, **kwargs):
+            await relay(*args, seconds=.01, **kwargs)
+
+        def post(url, text, **kwargs):
+            posts.append(text)
+            queue = summaries if text.startswith("Stream ended") else delivered
+            assert loop is not None
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+            return True
+
         async def go():
+            nonlocal loop, delivered, summaries, finished
+            loop = asyncio.get_running_loop()
+            delivered, summaries, finished = asyncio.Queue(), asyncio.Queue(), asyncio.Event()
             task = asyncio.create_task(qa_relay.server.run("fixture-registration"))
             try:
-                self.assertTrue(await asyncio.to_thread(posted.wait, 2))
+                await asyncio.wait_for(finished.wait(), 2)
+                for _ in range(2):
+                    await asyncio.wait_for(summaries.get(), 2)
             finally:
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
 
+        loop, delivered, summaries, finished = None, asyncio.Queue(), asyncio.Queue(), asyncio.Event()
         with qa_relay.fixture(), mock.patch.object(chat, "tiktok", fake_tiktok), \
-                mock.patch.object(chat, "post_discord", side_effect=lambda *_, **kw: posted.set() or True) as post:
+                mock.patch.object(chat, "relay", fast_relay), \
+                mock.patch.object(chat, "post_discord", side_effect=post) as posted:
             qa_relay.server.regs["fixture-registration"] = dict(platform="tiktok", channel="@qa",
                                                               webhook=qa_relay.HOOKS["fixture-one"])
-            asyncio.run(go())
+            with session_writes() as writers:
+                asyncio.run(go())
+            self.assertEqual(len(writers), 2)
             rows = [json.loads(line) for line in (qa_relay.server.DATA / "sessions.jsonl").read_text().splitlines()]
-            self.assertEqual(len(rows), 1)
-            row = rows[0]
-            self.assertEqual([row[k] for k in ("registration_id", "platform", "comments", "distinct_chatters",
-                                              "gifts", "peak_viewers", "new_follows")],
-                             ["fixture-registration", "tiktok", 3, 2, 5, 9, 1])
-            post.assert_called_once_with(qa_relay.HOOKS["fixture-one"], chat.session_summary(row), on_error=mock.ANY, on_retry=mock.ANY)
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                self.assertEqual([row[k] for k in ("registration_id", "platform", "comments", "distinct_chatters",
+                                                  "gifts", "peak_viewers", "new_follows")],
+                                 ["fixture-registration", "tiktok", 3, 2, 5, 9, 1])
+            self.assertEqual([text for text in posts if text.startswith("Stream ended")],
+                             [chat.session_summary(row) for row in rows])
+            self.assertEqual([text for text in posts if not text.startswith("Stream ended")],
+                             [chat.ICONS["tiktok"] + "One: hello\nvia LiveChat XR - livechat.deliciouswines.org"] * 2)
+            self.assertEqual(posted.call_count, 4)
+            for call in posted.call_args_list:
+                self.assertEqual(call.args[0], qa_relay.HOOKS["fixture-one"])
+                self.assertEqual(call.kwargs, dict(on_error=mock.ANY, on_retry=mock.ANY))
 
     def test_reconnect_reset_and_callback_failure_do_not_stop_chat(self):
         rows, batches = [], []

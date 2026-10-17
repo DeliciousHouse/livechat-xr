@@ -201,18 +201,61 @@ def same_channels(a: dict, b: dict) -> bool:
     return bool(norm(a) & norm(b))
 
 
+HOSTS = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
+         "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv"),
+         "youtube": ("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com")}
+
+
+def youtube_owner_handle(url: urllib.parse.ParseResult) -> str | None:
+    """Resolve a video or legacy channel link to its owner's current @handle, if available."""
+    parts = [x for x in url.path.split("/") if x]
+    cid = None
+    if url.hostname == "youtu.be" and parts:
+        video = parts[0]
+    elif parts[:1] == ["watch"]:
+        video = parse_qs(url.query).get("v", [""])[0]
+    elif parts[:1] in (["live"], ["shorts"]) and len(parts) > 1:
+        video = parts[1]
+    else:
+        video = ""
+        if parts[:1] == ["channel"] and len(parts) > 1 and re.fullmatch(r"UC[\w-]{22}", parts[1]):
+            cid = parts[1]
+        elif parts[:1] in (["c"], ["user"]) and len(parts) > 1:
+            m = re.search(r'"externalId":"(UC[\w-]{22})"', chat._yt_get(f"https://www.youtube.com/{parts[0]}/{quote(parts[1])}"))
+            cid = m[1] if m else None
+    if video:
+        if not re.fullmatch(r"[\w-]{6,20}", video):
+            return None
+        page = chat._yt_get(f"https://www.youtube.com/watch?v={video}")
+        m = re.search(r'"ownerProfileUrl":"https?://www\.youtube\.com/(@[\w.-]{3,30})"', page)
+        if m:
+            return m[1]
+        m = re.search(r'"externalChannelId":"(UC[\w-]{22})"', page)
+        cid = m[1] if m else None
+    if not cid:
+        return None
+    found = chat.resolve_identity("youtube", "", {"id": cid}) or {}
+    return found["handle"] if str(found.get("handle", "")).startswith("@") else None
+
+
 def normalise_channel(platform: str, channel: str) -> str:
     channel = channel.strip()
+    if "/" in channel and channel.partition("/")[0].lower() in HOSTS.get(platform, ()):
+        channel = "https://" + channel
     if channel.startswith(("https://", "http://")):
         try:
             url = urllib.parse.urlparse(channel)
         except ValueError:
             return channel  # malformed URLs fail the existing channel syntax check
-        hosts = {"tiktok": ("tiktok.com", "www.tiktok.com", "m.tiktok.com"),
-                 "twitch": ("twitch.tv", "www.twitch.tv", "m.twitch.tv"),
-                 "youtube": ("youtube.com", "www.youtube.com", "m.youtube.com")}
-        if url.hostname in hosts.get(platform, ()):
-            channel = url.path.strip("/").split("/")[0]  # also drops a trailing /live
+        if url.hostname in HOSTS.get(platform, ()):
+            first = url.path.strip("/").split("/")[0]
+            if platform == "youtube" and not first.startswith("@"):
+                try:
+                    return youtube_owner_handle(url) or channel  # unresolved links fail the syntax check
+                except Exception as e:
+                    log.warning("youtube link lookup: %s", type(e).__name__)
+                    return channel
+            channel = first  # also drops a trailing /live
     if platform in ("tiktok", "youtube"):
         return "@" + channel.lstrip("@")
     return channel.lstrip("@#").lower()
