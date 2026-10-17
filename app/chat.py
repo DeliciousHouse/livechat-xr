@@ -459,9 +459,13 @@ class Session:
 
 async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: str | None = None,
                  tally: Tally | None = None, webhook: str = "", *, identity=None, on_identity=None,
-                 on_viewers=None) -> None:
+                 on_viewers=None, on_owner_comment=None) -> None:
     """follow_ask=None: plain chat (hosted relay). A string turns on a Session per connection: the follow ask
-    (empty string = no ask) and a sessions.jsonl row when the connection ends."""
+    (empty string = no ask) and a sessions.jsonl row when the connection ends.
+    on_owner_comment(handle, text) is synchronous and must return quickly without blocking.
+    Once per owner comment, before suppressing it, receives the nonempty lowercase unique/display
+    handle without @ and the unchanged comment; nicknames never establish ownership.
+    Ordinary callback exceptions log a fixed message and chat continues; cancellation propagates."""
     from TikTokLive import TikTokLiveClient
     from TikTokLive.client.errors import UserNotFoundError
     from TikTokLive.events import CommentEvent, ConnectEvent, FollowEvent, GiftEvent, RoomUserSeqEvent
@@ -500,7 +504,14 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
         @client.on(CommentEvent)
         async def _(e: CommentEvent):
             handle, name = _who(e.user)
-            if handle.lower() != user.lower():  # skip the streamer's own messages
+            owner = handle.lstrip("@").lower()
+            if owner and owner == user:  # skip the streamer's own messages
+                if on_owner_comment is not None:
+                    try:
+                        on_owner_comment(owner, e.comment)
+                    except Exception:
+                        log.warning("tiktok owner comment callback failed")
+            else:
                 if tally:
                     tally.comment(handle.lower() or name)
                 emit(f"{name}: {e.comment}")
