@@ -24,6 +24,7 @@ import logging.handlers
 import os
 import re
 import secrets
+import signal
 import threading
 import time
 import urllib.error
@@ -34,6 +35,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote
 
 import chat
+import network
 
 DATA = Path(os.environ.get("DATA_DIR", "data"))
 PORT = int(os.environ.get("PORT", "13300"))
@@ -64,7 +66,9 @@ status: dict[str, str] = {}     # token -> latest chat status line
 tasks: dict[str, asyncio.Task] = {}
 stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; saved to stats.json every 30 s
 reports: dict[str, float] = {}  # rate limit support reports; no private IDs in the support log
-RELAY_VERSION = hashlib.sha256(Path(__file__).read_bytes() + Path(chat.__file__).read_bytes()).hexdigest()[:12]
+RELAY_VERSION = hashlib.sha256(Path(__file__).read_bytes() + Path(chat.__file__).read_bytes()
+                               + Path(network.__file__).read_bytes()).hexdigest()[:12]
+discovery = None  # Constructed by main with the same DATA volume and event loop as chat.
 STARTED = time.time()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
@@ -1027,6 +1031,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send(404, page(note("Not found.", True)))
 
     def do_POST(self):
+        if self.path == "/discord/interactions":
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                n = -1
+            if not 0 < n <= 65536:
+                code, result = 413, {}
+            elif discovery is None:
+                code, result = 503, {}
+            else:
+                code, result = discovery.interaction(self.headers, self.rfile.read(n))
+            raw = json.dumps(result).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         n = int(self.headers.get("Content-Length") or 0)
         if self.path == "/stripe-webhook" and n <= 512 * 1024:
             return self.stripe(self.rfile.read(n))
@@ -1215,6 +1237,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global discovery
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     DATA.mkdir(parents=True, exist_ok=True)
     load_log_tail()
@@ -1229,6 +1252,8 @@ def main() -> None:
         h.setLevel(logging.INFO)
         logging.getLogger().addHandler(h)
     loop.create_task(save_stats_loop())
+    discovery = network.Network(DATA, normalise_channel)
+    loop.create_task(discovery.start())
     logging.getLogger("httpx").setLevel(logging.WARNING)  # TikTokLive logs every request URL
     load_registrations()
     for i, token in enumerate(regs):
@@ -1240,7 +1265,14 @@ def main() -> None:
     log.info("listening on :%d with %d registrations", PORT, len(regs))
     if DISCORD_ID and not PUBLIC_URL:
         log.error("DISCORD_CLIENT_ID is set but PUBLIC_URL is empty: Connect Discord is hidden until PUBLIC_URL is in the env file")
-    loop.run_forever()
+    previous_term = signal.signal(signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(loop.stop))
+    try:
+        loop.run_forever()
+    finally:
+        loop.run_until_complete(discovery.stop())
+        srv.shutdown()
+        srv.server_close()
+        signal.signal(signal.SIGTERM, previous_term)
 
 
 if __name__ == "__main__":
