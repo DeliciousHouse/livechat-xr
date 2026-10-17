@@ -90,14 +90,14 @@ An independent Codex cold read (gpt-6-astra) steelmanned the product as helping 
 - **DM check (D15):** at opt-in the bot sends a welcome DM. Spotlight checkout, the similar-size DM, squad-up and the best-time hint stay off for that listing until the welcome DM succeeds, and the bot explains how to allow DMs from server members. Any later DM failure is recorded on the listing and shown on the streamer's manage page and the relay admin page.
 - **Opt out:** `/optout`, a reply or DM, or unticking the manage-page box. Removal takes effect within 10 minutes everywhere, including lists already posted.
 - **Already-posted lists:** Stage 0 posts are deleted the morning after each evening, and on a removal request the founder edits every earlier post that names that streamer the same day. From Stage 1 the bot keeps a single live-list message that it edits in place, so a removed streamer disappears from it at the next edit; `/live` answers are ephemeral (visible only to the person who asked) and never stay in the channel.
-- **One listings database** (a SQLite `listings` table next to `census.db` on Dora, written in transactions because the bot and the relay server both write it; D12) holds, per listing: platform handles, verified Discord user ID, in-game name, review status (pending, reviewed, removed), opt-in source (`/optin` or relay box), Spotlight status, squad flag with its expiry, and timezone. The collectors on Dora, the bot and any page all read it.
+- **One listings database (eng D1 / strict DR8):** `/data/listings.db` belongs to the existing relay process. Durable `listings` stores consent/review/removal (`removed_at`) and Discord/DM state; `supplied_channels` holds only handles supplied through authenticated ownership verification. Collector identities and current live rows are ephemeral (`channels`, `live_streams`), never supplied provenance. Snapshot allowlist and exact APIs are in [the core handoff](../network-operations.md). IGN/timezone and staged squad/payment fields are future surfaces/addition work, not existing columns. There is no census DB dependency or second writer process.
 - **Discord link before DM features:** relay-box opt-ins have no Discord identity, so the relay manage page gets a "Link Discord" step (OAuth `identify` scope) before squad-up, the best-time DM or Spotlight DMs turn on for that listing.
 - **Reviewed listings only:** every feature (list, pings, squad-up, best-time hint) reads only reviewed, active listings. Relay-box opt-ins enter the same 24-hour minors review as `/optin`.
 
 ### Data path and freshness
 
 - **Stage 0 runs before the collectors move.** Its list is copied by hand from the public pages at post time, so it is as fresh as the moment it's posted.
-- **Collectors move to Dora for Stage 1:** the census collectors run as a cron on Dora with the Twitch and YouTube keys in Dora's env file, writing `census.db` there. The bot reads it read-only. Owner: the relay-ops role.
+- **Collectors for Stage 1 (eng D1):** Pop1-only Twitch/YouTube tasks run on the existing relay asyncio loop, with HTTP/SQLite work offloaded. Keys remain in Dora's existing env file. No new census cron, process or database is deployed; O6/F1/terms holds remain.
 - **Cadence for one game (proposed, not activated):** Twitch Helix every 5 minutes; YouTube Pop1-only every 15 minutes is still gated by F1. The existing three-keyword collector would need at least 288 searches/day; a hypothetical one-query/one-page version needs 96 from the documented default 100-search bucket, before shared workloads, pages or retries. Read-only existing coverage counted 70 completed search pages in the prior Pacific day. No additional polling or existing-job pause was performed; no actual project allocation or 24-hour experiment is claimed. See [F1 safety evidence](vr-live-network-stage1-gates.md#f1-safety-preflight-not-a-24-hour-measurement). Establish an approved shared reserve and measure the final candidate, or request a quota extension/audit; do not shard the same API client across projects to bypass quota. TikTok public presence stays excluded: the authorized owner-room probe was offline, so no Pop1 game path/value was observed and O6/D22 remains unresolved. Reconnect, unknown counts and stale-evidence semantics still require an explicit contract.
 - **Freshness rule:** entries seen in the last 15 minutes show normally; 15-30 minutes old show "last seen N min ago"; older than 30 minutes are hidden. The bot re-edits its single live-list message every 5 minutes from 6pm to 11pm US Pacific, so no posted list is ever older than 5 minutes; outside that window the message reads "Updates 6-11pm PT" (D12). `/live` answers and similar-size DMs work at all hours (D13).
 - **Adding games** needs more YouTube quota (a quota increase request) or fewer YouTube checks per game. That's a Stage 2 decision.
@@ -145,12 +145,12 @@ An independent Codex cold read (gpt-6-astra) steelmanned the product as helping 
 ## Distribution Plan
 
 - Stage 0 needs no deployed software: a hand-copied list and an existing link shortener.
-- Stage 1: a Discord bot running as a container on Dora alongside the relay. The existing reviewed-main pull deploy (`server/deploy.py`) builds and swaps only the relay container, accepts only its one data mount, and pauses only the relay during backup, so the bot needs its own deploy step, a shared-storage design and a backup that is consistent across both SQLite writers (O5; owner: /plan-eng-review).
+- Stage 1 (eng D1): discovery is inside the existing relay container and `/data` volume. `server/deploy.py` is unchanged; no separate bot deploy/shared-volume arrangement. Nightly E2 archives use a sanitized SQLite online snapshot, not raw DB/WAL copies. Installation and live evidence belong to Dora after existing gates; code delivery is not activation.
 - Stage 2: a route on the existing relay web server, same deploy path.
 
 ## Dependencies
 
-- Census collectors moved to Dora, with the Twitch and YouTube keys in Dora's env file.
+- Private discovery runtime configured with the required names in Dora's existing env file; no census migration or new scheduler.
 - Relay manage-page opt-in box and live-status export for TikTok.
 - A Spotlight Stripe payment link plus a new webhook branch and listing record type.
 - A "Link Discord" (OAuth `identify`) step on the relay manage page.
@@ -492,6 +492,11 @@ Verification is deterministic: a fix counts when its `applied_text` is in the cu
 
 ## CEO Review (working, 2026-10-16)
 
+Historical review ledger: architecture references below to two containers, census
+storage and stopping a bot container are superseded by eng D1. Payment, blended
+counts and TikTok-presence proposals are further constrained by free launch and
+DR8. These quoted findings/answers remain as evidence, not active instructions.
+
 Mode: SCOPE EXPANSION. Depth: strategy-only. Working plan: this file. Approved decisions: none yet.
 
 ### Decision ledger
@@ -588,19 +593,11 @@ Feasibility blockers before Stage 1 (not Stage 0): YouTube quota re-measure (F1)
 **Current scope.** Mode SCOPE EXPANSION (D1, user choice over a HOLD SCOPE recommendation). Accepted: X1 squad-up (D2), X2 relay funnel (D3), X4 viewer pings (D5), RA Spotlight first (D7), RB core-first clock (D8), RC repairs (D9), RE roll-up pings (D10), RF core-only decision (D11, then reopened by D20), RD repairs (D12), RG fixes (D13), S2-1 DM check (D15), S3-1 report/block (D16), S4-1 multistream entries (D17), O1 TikTok ownership (D18), O2 discovery bar (D19), O3 sequencing and hand squad test (D20), O4 launch cohort (D21). Deferred: X5 recap (D6), X3 best-time hint (D4 then D23). Pending: O6 TikTok live-presence contract (D22, investigate).
 
 ### Section 1: Architecture
-```
-   Twitch Helix ----+                                   +---> Discord: live-list message, /live, pings
-   YouTube Data ----+--> census collectors (Dora cron) -+          ^
-                         writes census.db               |          |
-   relay (TikTok chat) --> live status + room ID -------+--> bot container (new) --> squad DMs, Spotlight DMs
-        |  manage page: list-me box, Link Discord,      |          ^
-        |  /profile fields, ownership code              |          |
-        v                                               v          |
-   listings table (SQLite, next to census.db) <--- both relay server and bot write, in transactions
-        ^
-   Stripe webhook (relay): checkout + subscription events -> Spotlight on listing
-```
-- **WARNING:** two containers write one SQLite database; the shared volume, locking and a backup consistent across both writers are undesigned (O5). Owner: /plan-eng-review.
+Active replacement: [eng D1 data flow](#eng-section-1-architecture), one process
+and `/data`. The earlier diagram proposed census collectors feeding a new bot
+container and both bot/relay writing listings beside census.db. That proposal
+was rejected by eng D1; its historical risk findings follow.
+- **SUPERSEDED O5:** two containers/shared locking replaced by one process, independent transactional SQLite connection lifetimes, and sanitized online snapshots.
 - **WARNING:** Dora is the single point of failure for the relay, collectors and bot; acceptable at this scale, but a Dora outage silently empties the list (see the critical gap below).
 - **OK:** coupling is justified: the bot reads relay TikTok status instead of scraping TikTok, which the plan forbids.
 - Rollback: stop the bot container; the relay keeps working. Listings data stays in SQLite. Time: minutes.
@@ -860,8 +857,19 @@ D1 data flow (one process, one volume):
      ├─ Pop1 Twitch collector  ── to_thread(urllib) ┤
      ├─ Pop1 YouTube collector ── to_thread(urllib) ┤
      └─ list poster + staleness check (E1) ─────────┘
-  /data volume ──▶ deploy.py paused tar (consistent) ; backup.sh nightly docker cp (E2)
+  /data/listings.db ──▶ online temporary copy ──▶ sanitize + VACUUM + integrity/FK
+                    ──▶ listings.snapshot.db (listings + supplied handles ONLY)
+  backup.sh archive: existing JSON/logs + sanitized snapshot; NEVER raw DB/WAL/SHM
+  restore while stopped: expire removals, unbound identities, fresh proof to rebind
 ```
+
+T11/T12/T17 + strict DR8 implementation contract: [network-operations.md](../network-operations.md).
+The list poster/ownership UX in this diagram remains surfaces-owned; staged
+role pings/TikTok presence/payments are not implemented by this core. The unchanged
+deploy controller's separate paused rollback tar is not claimed sanitized: E/C
+must account for it and older/offsite archives before stronger retention claims.
+Active-record seven-day expiry is not seven-day physical deletion from the
+unchanged 30-day nightly archive retention. No live migration/install is authorized.
 
 Findings, most severe first:
 1. [P1] (confidence: 9/10) server/server.py:1187 and server/server.py:221 — `loop.run_forever()` runs every TikTok relay on one event loop, and the relay's HTTP helpers are blocking `urllib.request` calls. A collector or bot REST call written in the existing style inside the loop stalls every streamer's chat while Twitch, YouTube or Discord is slow. Disposition: required implementation of eng D1: network HTTP calls run through `asyncio.to_thread` (or a worker thread, as `resolve_saved_identities` already does), interactions are handled on HTTP threads, and a regression test holds a slow fake collector while a relay keeps delivering.
@@ -900,7 +908,7 @@ Keep the live copy and accept the risk of a torn database backup. Effort S, risk
 
 State: approved
 Actual answer: A) Online snapshot + restore test (recommended), eng D3 answer 2026-10-17
-Accepted scope: backup.sh first runs `docker exec` so the relay writes `listings.snapshot.db` with SQLite's online backup API, then copies as today; the archive check also opens the snapshot and runs `PRAGMA integrity_check`; a test restores a snapshot and finds a just-written opt-out; a copy of backup.sh is kept in `server/` for review
+Accepted scope (refined by strict DR8): backup.sh runs the stdlib helper in the relay image to create a temporary online copy, sanitize to durable listings and explicitly supplied handles only, VACUUM, verify integrity/foreign keys and atomically publish `listings.snapshot.db`. The archive preserves unrelated JSON/logs but excludes raw platform DB/WAL/SHM and all old/temporary snapshots; its check opens the actual snapshot. Restore expires overdue removals and leaves all identities unbound. Concurrent-write and real runtime restore tests preserve a just-written opt-out. The checked-in script is a proposed installation, not live-host evidence.
 History: raised in eng Section 1
 
 ### Eng Section 2: Code quality

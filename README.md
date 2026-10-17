@@ -46,6 +46,8 @@ Twitch/YouTube collectors and signed Discord interactions alongside (not instead
 Only `/network-status` is registered in the configured test guild; listing setup and `/optin` are not
 available yet. Missing discovery configuration leaves chat running unchanged. See the
 [runtime contract and runnable coverage ledger](docs/network-foundation.md) for scope and rollback.
+The [incident, sanitized backup/restore and retention contract](docs/network-operations.md)
+documents the implemented core; host installation and public activation remain separate.
 
 | Document | Use it for |
 |---|---|

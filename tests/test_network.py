@@ -75,7 +75,11 @@ class Storage(unittest.TestCase):
         for consent, review in ((False, "reviewed"), (True, "pending"), (True, "removed")):
             self.store.set_listing(lid, opted_in=consent, review_status=review)
             self.assertEqual(self.store.discovery(101), [])
-        self.store.set_listing(lid, opted_in=True, review_status="reviewed")
+        self.store.upsert_presence("twitch", [row()], 100)
+        self.store.set_listing(lid, opted_in=True)
+        self.store.record_supplied_channel(lid, "twitch", "streamer")
+        self.store.bind_verified_channel(lid, "twitch", "streamer", "42")
+        self.store.set_listing(lid, review_status="reviewed")
         self.assertEqual(len(self.store.discovery(101)), 1)
         self.assertEqual(self.store.discovery(1901), [])
         self.store.upsert_presence("twitch", [dict(row(), viewers=None)], 200)
@@ -117,13 +121,11 @@ class Storage(unittest.TestCase):
                 def paused_connect():
                     with original_connect() as db:
                         def trace(sql):
-                            target = "UPDATE listings SET" if http_first else "UPDATE presence SET live=0"
+                            target = "UPDATE listings SET" if http_first else "DELETE FROM live_streams"
                             if sql.startswith(target):
                                 locked.set()
                                 if not release.wait(3): raise TimeoutError("test writer stalled")
-                        # Removal takes its write lock before the callback; collector already uses BEGIN IMMEDIATE.
-                        if http_first and threading.current_thread().name != "collector":
-                            db.execute("BEGIN IMMEDIATE")
+                        # Both removal and collector now acquire BEGIN IMMEDIATE themselves.
                         db.set_trace_callback(trace)
                         yield db
                 def collect():

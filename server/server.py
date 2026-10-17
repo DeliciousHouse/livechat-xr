@@ -67,7 +67,7 @@ tasks: dict[str, asyncio.Task] = {}
 stats: dict[str, dict] = {}     # token -> {posts, fails, last_post, last_error}; saved to stats.json every 30 s
 reports: dict[str, float] = {}  # rate limit support reports; no private IDs in the support log
 RELAY_VERSION = hashlib.sha256(Path(__file__).read_bytes() + Path(chat.__file__).read_bytes()
-                               + Path(network.__file__).read_bytes()).hexdigest()[:12]
+                               + Path(network.__file__).read_bytes() + Path(network.backup.__file__).read_bytes()).hexdigest()[:12]
 discovery = None  # Constructed by main with the same DATA volume and event loop as chat.
 STARTED = time.time()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
@@ -894,6 +894,37 @@ def backup_line() -> str:
     return ", ".join(parts) + "."
 
 
+def network_incidents() -> str:
+    e = html.escape
+    state = discovery.snapshot() if discovery else {"enabled": False, "missing": [], "error": "not started", "sources": {}}
+    problems = []
+    if not state["enabled"]:
+        reason = "missing " + ", ".join(state["missing"]) if state["missing"] else state["error"] or "stopped"
+        problems.append("Discovery network off — " + reason + ". Add missing settings to ~/.livechat-xr.env on Dora, then restart the relay.")
+    else:
+        for platform, source in state["sources"].items():
+            if source["delayed"]:
+                since = source["incident_since"]
+                stamp = network.datetime.fromtimestamp(since, network.PACIFIC).strftime("%H:%M %Z")
+                problems.append(f'{network.SOURCE_NAMES[platform]} data stale since {stamp} ({ago(since)}) — '
+                                + (source["error"] or "waiting for two successful polls"))
+    if discovery and discovery.store.path.exists():
+        try:
+            closed = discovery.store.dm_closed_count()  # HTTP thread, never the relay loop.
+            if closed: problems.append(f'DMs closed: {closed} listing' + ("s" if closed != 1 else ""))
+        except Exception:
+            problems.append("Discovery storage unavailable — check the relay log.")
+    running = loop.is_running()
+    if not running: problems.append("Chat relay loop is not running — check the relay process.")
+    if problems:
+        return ('<section id="network-incidents" class="box network-incidents" aria-label="Service incidents">'
+                f'<p><strong>Chat relay: {"running" if running else "not running"}</strong></p><ul>'
+                + "".join(f'<li><span aria-hidden="true">⚠</span> {e(p)}</li>' for p in problems) + '</ul></section>')
+    current = bool(state["sources"]) and all(s["last_success"] > time.time() - 900 and not s["error"]
+                                            for s in state["sources"].values())
+    return '<p class="network-summary">Discovery: ' + ("all sources current" if current else "waiting for first successful polls or retry") + '</p>'
+
+
 def admin_body() -> str:
     e = html.escape
     live = sum("connected" in status.get(t, "") for t in regs)
@@ -915,7 +946,11 @@ def admin_body() -> str:
                    for ts, lvl, name, msg in reversed(logbuf) if name not in ("httpx", "httpcore"))
     warn = sum(lvl in ("WARNING", "ERROR", "CRITICAL") for _, lvl, _, _ in logbuf)
     return ('<meta http-equiv="refresh" content="30"><style>main{max-width:1100px}td{vertical-align:top;border-top:1px solid #333}'
-            'th{text-align:left}</style><h1>LiveChat XR admin</h1>'
+            'th{text-align:left}.network-incidents{border:1px solid var(--error);border-radius:22px;overflow-wrap:anywhere}'
+            '.network-incidents p{margin:0 0 12px}.network-incidents ul{margin:0;padding:0;list-style:none}'
+            '.network-incidents li span{margin-right:8px}'
+            '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}</style>'
+            + network_incidents() + '<h1>LiveChat XR admin</h1>'
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
             f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
