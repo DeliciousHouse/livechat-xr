@@ -4,6 +4,8 @@ import io
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -43,37 +45,103 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(banners, ["🟣 Fan: 0\n🟣 Fan: 1\n🟣 Fan: 2\n+1 more"])
 
     async def test_hosted_mixed_burst_records_all_ten_lines(self):
+        await self.hosted_with_collector("baseline")
+
+    async def test_hosted_blocking_collector_keeps_each_line_under_half_second(self):
+        await self.hosted_with_collector("blocked")
+
+    async def test_hosted_crashing_collector_delivers_ten_within_two_seconds(self):
+        await self.hosted_with_collector("crashing")
+
+    async def test_hosted_missing_each_secret_delivers_ten_within_two_seconds(self):
+        from tests.test_network import network
+        for name in network.REQUIRED:
+            with self.subTest(missing=name):
+                await self.hosted_with_collector(name)
+
+    async def hosted_with_collector(self, mode):
         from tests.test_account import server, HOOK
-        sent, emitted = [], []
+        from tests.test_network import network, config
+        from nacl.signing import SigningKey
+        sent, emitted, emit_times, post_times = [], [], {}, {}
+        ready, entered, collector_done = threading.Event(), threading.Event(), threading.Event()
+        emitters = {}
+        loop = asyncio.get_running_loop()
+        collector_times = []
+        def collect():
+            collector_times.append(time.monotonic())
+            entered.set()
+            if mode == "blocked":
+                time.sleep(5)
+                collector_done.set()
+            if mode == "crashing":
+                raise RuntimeError("synthetic collector failure")
+            return []
+        def produce():
+            if not ready.wait(3) or not entered.wait(3): return
+            for channel in ("tk", "tw"):
+                for i in range(5):
+                    line = f"{channel}: {i}"
+                    tagged = chat.ICONS["tiktok" if channel == "tk" else "twitch"] + line
+                    emitted.append(tagged)
+                    emit_times[tagged] = time.monotonic()
+                    loop.call_soon_threadsafe(emitters[channel], line)
+                    if mode != "baseline": time.sleep(.01)
+        def post(_, text, **kw):
+            sent.append(text)
+            for line in text.splitlines():
+                post_times[line] = time.monotonic()
+            return True
         real_relay = chat.relay
         async def source(channel, emit, status, *args, **kwargs):
-            for i in range(5):
-                line = f"{channel}: {i}"
-                emitted.append(chat.ICONS["tiktok" if channel == "tk" else "twitch"] + line)
-                emit(line)
+            emitters[channel] = emit
+            if len(emitters) == 2: ready.set()
             await asyncio.Event().wait()
         async def fast_relay(*args, **kwargs):
             await real_relay(*args, seconds=.01, **kwargs)
         async def complete():
             while server.stats.get("fixture", {}).get("lines_posted", 0) < 10:
                 await asyncio.sleep(.001)
-        with mock.patch.object(server, "regs", {"fixture": dict(platform="tiktok", channel="tk", plan="paid",
+        cfg = config()
+        cfg["DISCORD_PUBLIC_KEY"] = SigningKey.generate().verify_key.encode().hex()
+        if mode in network.REQUIRED: cfg.pop(mode)
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(server, "regs", {"fixture": dict(platform="tiktok", channel="tk", plan="paid",
                 webhook=HOOK, channels={"tiktok": "tk", "twitch": "tw"})}), \
                 mock.patch.object(server, "stats", {}), mock.patch.object(server, "status", {}), \
                 mock.patch.object(chat, "tiktok", source), mock.patch.object(chat, "twitch", source), \
                 mock.patch.object(chat, "relay", fast_relay), \
-                mock.patch.object(chat, "post_discord", side_effect=lambda _, text, **kw: sent.append(text) or True):
+                mock.patch.object(chat, "post_discord", post):
+            net = network.Network(Path(tmp), server.normalise_channel, cfg)
             task = asyncio.create_task(server.run("fixture"))
+            producer = threading.Thread(target=produce)
             try:
-                await asyncio.wait_for(complete(), 2)
+                with mock.patch.object(net, "collect_twitch", collect), \
+                        mock.patch.object(net, "collect_youtube", return_value=[]), \
+                        mock.patch.object(net, "register_commands", new=mock.AsyncMock()):
+                    await net.start()
+                    if not net.enabled: entered.set()
+                    producer.start()
+                    await asyncio.wait_for(complete(), 2)
+                producer.join(1)
                 st = server.stats["fixture"]
                 self.assertEqual([st[k] for k in ("lines_received", "lines_posted", "lines_dropped")], [10, 10, 0])
                 self.assertEqual(server.delivery_status("fixture"), "All 10 chat messages delivered.")
+                self.assertEqual(len(post_times), 10)
+                if mode == "blocked":
+                    self.assertFalse(collector_done.is_set(), "chat must finish while collector is still blocked")
+                    self.assertTrue(all(post_times[k] - t < .5 for k, t in emit_times.items()))
+                self.assertLess(max(post_times.values()) - min(emit_times.values()), 2)
             finally:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+                await net.stop()
+                if producer.ident: producer.join(1)
+                if mode == "blocked":
+                    self.assertTrue(await asyncio.to_thread(collector_done.wait, 6))
+                    self.assertGreaterEqual(time.monotonic() - collector_times[0], 5)
         self.assertEqual("\n".join(sent).splitlines(), emitted)
-        self.assertEqual(len(sent), 2)
+        if mode == "baseline": self.assertEqual(len(sent), 2)
 
     async def test_bursts_and_banner_are_independent(self):
         for counts in ((4, 0), (5, 5)):
