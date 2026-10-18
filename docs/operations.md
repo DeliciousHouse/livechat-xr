@@ -31,7 +31,7 @@ Current tag behavior is visible in [build.yml](../.github/workflows/build.yml); 
 
 ## Data and recovery boundaries
 
-`registrations.json` includes private manage tokens, webhooks, names/emails, stream channels, plans and subscription IDs. `stats.json` persists periodically; logs rotate. `last_backup` and `last_offsite` are epoch-time stamps written by external backup jobs, not backup jobs inside `server.py`. Keep backups protected as credentials and customer data. The published privacy policy says backup copies roll off within 90 days; actual retention and scheduled jobs must be verified by the CI/CD owner.
+`registrations.json` includes private manage tokens, webhooks, names/emails, stream channels, plans and subscription IDs. `stats.json` persists periodically; logs rotate. `last_backup` and `last_offsite` are epoch-time stamps written by external backup jobs, not backup jobs inside `server.py`. Keep backups protected as credentials and customer data. The prior relay privacy policy stated that backup copies roll off within 90 days. The current policy distinguishes active-record deletion from historic server archives, offsite copies and controller rollback archives; complete archive-erasure timing has not been verified. The CI/CD owner must verify actual retention and scheduled jobs.
 
 Restore must preserve registration tokens, webhook URLs and subscription matching, not just counts. Never show their values in a health report. Restore into isolation first with real outbound posting disabled, then follow the reviewed runbook for production changes. Do not roll back to a data snapshot casually: it can undo registrations, deletion and payment transitions since that snapshot. Deleting a registration does not cancel Stripe billing.
 
@@ -99,9 +99,10 @@ Retention limits: removal clears active consent/platform data/peaks immediately;
 active removed records and supplied handles expire at seven days, enforced on
 startup, maintenance, snapshot and restore. Legacy timestamp-less removals purge
 conservatively. Re-opt-in before expiry returns to pending review. **Thirty-day
-historic archives are not seven-day physical erasure.** This work neither rewrites
-old archives/offsite copies nor changes the 90-day statement for unrelated relay
-JSON. The unchanged deploy controller also has its own paused rollback tar; this
+historic archives are not seven-day physical erasure.** This work does not rewrite
+old archives/offsite copies. The prior 90-day statement for unrelated relay JSON
+is historical, not a verified archive-erasure deadline. The unchanged deploy
+controller also has its own paused rollback tar; this
 PR does not claim that path is sanitized. E/C must inventory/verify those copies
 before stronger deletion or DR8-wide production policy claims. Restore-time expiry
 prevents an overdue record from being served, not its bytes from existing in an
