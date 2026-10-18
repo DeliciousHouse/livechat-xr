@@ -693,7 +693,8 @@ class Network:
         return None  # O6 unresolved: no TikTok presence or ownership claims here.
 
     def _discord(self, method, path, payload):
-        headers = {"Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json",
+                   "User-Agent": "DiscordBot (https://livechat.deliciouswines.org, 1.0)"}
         if not path.startswith("/webhooks/"):
             headers["Authorization"] = "Bot " + self.config["DISCORD_BOT_TOKEN"]
         return request_json("https://discord.com/api/v10" + path, headers=headers, data=payload, method=method)

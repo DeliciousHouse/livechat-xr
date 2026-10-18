@@ -342,6 +342,29 @@ class Collectors(unittest.TestCase):
                 self.net.collect_youtube()
         self.assertTrue(raised.exception.quota)
 
+    def test_discord_request_headers_for_bot_and_followup_webhook(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.status = 200
+        response.__enter__.return_value.read.return_value = b'{}'
+        for method, path, payload in (
+                ("PUT", "/applications/123/guilds/123/commands", network.COMMANDS),
+                ("POST", "/channels/123/messages", network.message("hello")),
+                ("POST", "/users/@me/channels", {"recipient_id": "123"}),
+                ("PATCH", "/webhooks/123/synthetic/messages/@original", network.message("hello"))):
+            with self.subTest(path=path), \
+                    mock.patch.object(network.urllib.request, "urlopen", return_value=response) as request:
+                self.assertEqual(self.net._discord(method, path, payload), (200, {}))
+                req = request.call_args.args[0]
+                self.assertIsInstance(req, urllib.request.Request)
+                self.assertEqual(req.get_header("User-agent"), "DiscordBot (https://livechat.deliciouswines.org, 1.0)")
+                self.assertEqual(req.get_header("Content-type"), "application/json")
+                self.assertEqual(req.get_header("Authorization"),
+                                 None if path.startswith("/webhooks/") else "Bot " + self.net.config["DISCORD_BOT_TOKEN"])
+                self.assertEqual(req.full_url, "https://discord.com/api/v10" + path)
+                self.assertEqual(req.get_method(), method)
+                self.assertEqual(json.loads(req.data), payload)
+                self.assertEqual(request.call_args.kwargs["timeout"], 10)
+
     def test_http_timeout_including_discord_and_token_refresh(self):
         response = mock.MagicMock()
         response.__enter__.return_value.status = 200
