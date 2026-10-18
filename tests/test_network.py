@@ -23,7 +23,8 @@ import network
 
 
 def config():
-    return {name: "123" for name in network.REQUIRED}
+    return dict({name: "123" for name in network.REQUIRED}, DISCORD_CLIENT_ID="123",
+                POP1_LIVE_APPLICATION_ID="123")
 
 
 def row(handle="streamer"):
@@ -218,15 +219,30 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.net.store.listing(lid)["dm_closed"])
 
     async def test_registration_is_private_and_idempotent(self):
+        self.net.config["POP1_LIVE_APPLICATION_ID"] = "456"
         with mock.patch.object(self.net, "_discord", return_value=(200, network.COMMANDS)) as request:
             await self.net.register_commands()
             await self.net.register_commands()
         self.assertEqual(request.call_count, 2)
         self.assertEqual(request.call_args_list[0], request.call_args_list[1])
-        self.assertEqual(request.call_args.args[:2], ("PUT", "/applications/123/guilds/123/commands"))
+        self.assertEqual(request.call_args.args[:2], ("PUT", "/applications/456/guilds/123/commands"))
         self.assertEqual([c["name"] for c in request.call_args.args[2]],
                          ["network-status", "live", "optin", "profile", "optout", "review", "remove"])
         self.assertNotIn("squad", [c["name"] for c in request.call_args.args[2]])
+
+    async def test_missing_bot_application_id_never_falls_back_to_oauth(self):
+        for value in (None, ""):
+            cfg = dict(self.net.config)
+            if value is None: cfg.pop("POP1_LIVE_APPLICATION_ID")
+            else: cfg["POP1_LIVE_APPLICATION_ID"] = value
+            net = network.Network(Path(self.tmp.name), server.normalise_channel, cfg)
+            with mock.patch.object(net, "discord", new=mock.AsyncMock()) as discord, \
+                    self.assertLogs("network", level="ERROR"):
+                await net.start()
+            self.assertFalse(net.enabled)
+            self.assertEqual(net.snapshot()["missing"], ["POP1_LIVE_APPLICATION_ID"])
+            self.assertEqual(net.tasks, set())
+            discord.assert_not_awaited()
 
     async def test_stop_joins_inflight_sqlite_work(self):
         entered, release = threading.Event(), threading.Event()
@@ -439,6 +455,7 @@ class Interactions(unittest.TestCase):
             self.assertEqual(self.post(body)[0], 400)
 
     def test_slow_command_ack_then_followup_and_scope(self):
+        self.net.config["POP1_LIVE_APPLICATION_ID"] = "456"
         posted = threading.Event()
         received = []
         received_paths = []
@@ -463,15 +480,16 @@ class Interactions(unittest.TestCase):
         def transport(method, path, payload):
             return network.request_json(f"http://127.0.0.1:{discord.server_port}" + path,
                                         data=payload, method=method)
-        body = dict(type=2, id="interaction1", application_id="123", token="synthetic",
+        body = dict(type=2, id="interaction1", application_id="456", token="synthetic",
                     guild_id="123", member={"user": {"id": "7"}}, data={"name": "network-status"})
         with mock.patch.object(self.net, "command", slow), mock.patch.object(self.net, "_discord", transport):
+            self.assertEqual(self.post(dict(body, application_id="123"))[0], 403)
             start = time.monotonic()
             self.assertEqual(self.post(body), (200, {"type": 5, "data": {"flags": 64}}))
             self.assertLess(time.monotonic() - start, 3)
             self.assertFalse(posted.is_set())
             self.assertTrue(posted.wait(4))
-            self.assertEqual(received_paths, ["/webhooks/123/synthetic/messages/@original"])
+            self.assertEqual(received_paths, ["/webhooks/456/synthetic/messages/@original"])
             self.assertEqual(received[0]["content"], "finished")
             self.assertEqual(received[0]["flags"], 68)
             self.assertEqual(self.post(dict(body, guild_id="other"))[0], 403)

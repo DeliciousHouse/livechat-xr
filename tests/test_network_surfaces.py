@@ -322,10 +322,12 @@ class Surfaces(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_reuses_only_own_list_and_stop_pauses(self):
         n = self.net
+        n.config.update(DISCORD_CLIENT_ID="123", POP1_LIVE_APPLICATION_ID="456")
         n.discord.side_effect = [[
             {"id": "human", "author": {"id": "9"}, "content": "**Pop1 Live** fake"},
-            {"id": "bot-ping", "author": {"id": "123"}, "content": "Pop1 Live: 3 small streams live"},
-            {"id": "original", "author": {"id": "123"}, "content": "**Pop1 Live** · old list"}], {}]
+            {"id": "oauth-app", "author": {"id": "123"}, "content": "**Pop1 Live** wrong app"},
+            {"id": "bot-ping", "author": {"id": "456"}, "content": "Pop1 Live: 3 small streams live"},
+            {"id": "original", "author": {"id": "456"}, "content": "**Pop1 Live** · old list"}], {}]
         await n.surface_tick(self.now)
         self.assertEqual(n.live_message, ("123", "original"))
         self.assertEqual(n.discord.call_args.args[:2], ("PATCH", "/channels/123/messages/original"))

@@ -90,10 +90,13 @@ and restarts begin a new monitoring epoch. Founder delivery failure is logged,
 not retried on every maintenance tick. Discord transport retains bounded 429 retry.
 Pinned `tzdata` supplies IANA data on Windows; timezone logic is stdlib `zoneinfo`.
 
-Required names are unchanged: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`,
-`DISCORD_CLIENT_ID`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
+Required discovery names: `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`,
+`POP1_LIVE_APPLICATION_ID`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `YOUTUBE_API_KEY`,
 `POP1_LIVE_GUILD_ID`, `POP1_LIVE_CHANNEL_ID`, `POP1_LIVE_FOUNDER_ID`. No values in
-panel/logs. Chat-health reporting is independent of network state.
+panel/logs. The dedicated application ID must match the Pop1 bot token/public key;
+it has no fallback to the existing relay OAuth `DISCORD_CLIENT_ID`. Leave that
+client and `DISCORD_CLIENT_SECRET` unchanged. Missing the bot ID disables discovery,
+not chat; chat-health reporting is independent of network state.
 
 ## Sanitizer / restore seam for C and E
 
