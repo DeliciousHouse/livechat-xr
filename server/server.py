@@ -69,6 +69,9 @@ reports: dict[str, float] = {}  # rate limit support reports; no private IDs in 
 RELAY_VERSION = hashlib.sha256(Path(__file__).read_bytes() + Path(chat.__file__).read_bytes()
                                + Path(network.__file__).read_bytes() + Path(network.backup.__file__).read_bytes()).hexdigest()[:12]
 discovery = None  # Constructed by main with the same DATA volume and event loop as chat.
+NETWORK_WEB_PRIVATE = False  # Only the isolated test harness enables onboarding; no public activation switch.
+network_oauth: dict[str, tuple[float, str]] = {}  # Ephemeral identify state -> registration, never saved.
+network_csrf: dict[str, str] = {}  # Per-registration CSRF, never a listing identity or backup field.
 STARTED = time.time()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
@@ -114,7 +117,7 @@ async def save_stats_loop() -> None:
             except OSError as e:
                 log.warning("saving stats failed: %r", e)
 
-lock = threading.Lock()
+lock = threading.RLock()
 oauth: dict[str, tuple[float, dict]] = {}  # state -> (created, sign-up form) while the user is on Discord
 loop = asyncio.new_event_loop()
 
@@ -633,7 +636,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
 <style>{css}</style>{head}</head><body>
 <header class="site"><a class="brand" href="/">LiveChat XR</a>
-<nav aria-label="Site"><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a></nav></header>
+<nav aria-label="Site"><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
 <main>{body}</main></body></html>"""
 
 DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>')
@@ -675,7 +678,7 @@ maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <p style="text-align:center"><a href="/recover">Find my relay</a> — lost your private link?</p>
 <footer>Your name and email are only used to know who is using it.{ga_note} Your webhook URL is only used to post your chat.
 Mentions are disabled, so chat can't ping anyone.<br><a href="https://github.com/DeliciousHouse/livechat-xr">Open source on GitHub</a> ·
-<a href="/privacy">Privacy</a></footer>"""
+<a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></footer>"""
 
 # Resize-aware heights for the hero text (Pretext, MIT, served from /pretext.js). If it fails to load, plain CSS layout stands.
 PRETEXT_JS = """<script type="module">
@@ -702,21 +705,61 @@ except OSError:
     PRETEXT = b""
 
 PRIVACY = """<h1>Privacy</h1>
-<p>LiveChat XR for Discord posts your TikTok LIVE, Twitch or YouTube chat into a Discord channel you choose. This is everything it keeps.</p>
-<div class="box"><b>What we store</b><ul>
-<li>Your name and email: typed in, or taken from your Google account if you use Continue with Google
-(only your name and email address; nothing else from Google).</li>
-<li>Your TikTok, Twitch or YouTube channel name and the Discord webhook for your channel.</li>
-<li>Counts of messages posted and failed, for troubleshooting. Chat messages are passed straight to Discord, not stored.</li>
-<li>If you pay, Stripe handles the payment; we only keep the subscription ID.</li></ul></div>
-<div class="box"><b>What we don't do</b><ul><li>We don't sell or share your details. They are only used to run the relay and to
-know who is using it.</li><li>We don't post anywhere except the Discord channel you connected.</li></ul></div>
-<div class="box"><b>Analytics</b><br>{ga}</div>
-<div class="box"><b>Fonts</b><br>The page font is loaded from Google Fonts, so your browser fetches it from Google's servers.</div>
-<div class="box"><b>Deleting your data</b><br>Use <b>Stop and delete</b> on your private manage page (the link is also
-posted in your Discord channel). That removes your registration right away. Backup copies roll off within 90 days.
-Questions: <a href="https://github.com/DeliciousHouse/livechat-xr/issues">open an issue on GitHub</a>.</div>
-<p><a href="/">Back</a></p>"""
+<p>LiveChat XR relays TikTok LIVE, Twitch and YouTube chat to your chosen Discord channel.
+The private Pop1 Live discovery test is separate: a relay account does not opt you into a listing.</p>
+<h2>Chat relay</h2><p>We store your name, email (typed or verified with Google), supplied channels,
+resolved platform identities, Discord channel/server IDs and webhook, private manage credential, plan and any Stripe subscription ID.
+These run your relay and let you manage it. Stripe handles payment details. Chat text passes to Discord without being stored here;
+delivery counts, status and troubleshooting logs are retained. Discord receives the messages you ask us to relay.</p>
+<h2>Stream summaries and census</h2><p>Relay session summaries store the channel, registration association, start/end times,
+comment and distinct-chatter totals, gift/support-event totals and available peak-viewer/follow totals.
+Chatter identifiers used for these counts stay in connection memory, not the summary file.
+Discovery's separate census observes public Twitch and YouTube channel identities, titles, game, live status and raw per-platform
+viewer counts to find Population: ONE streams. Observation alone never authorizes a public listing.</p>
+<h2>Private discovery listings</h2><p>Explicit opt-in and channel proof are separate from Discord sign-in and founder review.
+Listing records contain the Discord user ID, proved streamer-supplied handles, in-game name, IANA timezone,
+consent/review/removal state, DM availability, alert preference and optional one-per-streamer “I'd pay” flag.
+The relay keeps only the listing association and setup consent alongside its own registration. OAuth credentials and proof challenges
+are temporary, not saved in the listing database or snapshots. Eligible listings and Watch on Twitch / Watch on YouTube links
+can appear in the configured private Discord test; alerts require opt-in. TikTok discovery is not enabled.</p>
+<h2>YouTube and Google</h2><p>Private discovery and ownership proof use official YouTube API Services.
+The chat relay separately reads YouTube's live-chat page endpoint. LiveChat XR is not affiliated with YouTube, Twitch or TikTok.
+See the <a href="https://policies.google.com/privacy">Google Privacy Policy</a> and
+<a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>.</p>
+<h2>Removal and retention</h2><p>For discovery, run <code>/optout</code> as the linked Discord account or untick
+<b>List me</b> and save on your private manage page. The shared removal operation immediately excludes the listing,
+deletes its active platform data and attempts to edit the list and naming pings. Failed remote edits are reported and retried a bounded
+number of times; already-delivered notifications cannot be recalled. The active listing record is deleted within 7 days unless you opt back in.
+Discovery platform data expires after at most 24 hours; ended streams are cleared on a successful poll. Live visibility expires sooner,
+after 30 minutes. Memory-only peaks expire within 24 hours. New sanitized listing snapshots exclude platform data and restore no verified binding.</p>
+<p>For the relay, <b>Stop and delete</b> on the private manage page removes the active registration immediately; it does not cancel
+Stripe billing. Session summaries, logs and historic backups are separate from the active registration. Their complete erasure timing
+has not been verified. The prior relay policy stated backup copies roll off within 90 days; the operations record describes 30-day
+server archives, offsite copies and controller rollback archives. Those different scopes are not proof of a single erasure deadline.
+In particular, historic backups are not proved erased within 7 days. We do not claim that active listing deletion erases those archives.</p>
+<h2>Analytics and fonts</h2><p>{ga} Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
+no visitor cookies, IP/UA tracking, fingerprinting or click-total proxy. E6 visitor measurement is unavailable.
+Google Fonts supplies this page's font, so your browser contacts Google's servers.</p>
+<h2>Questions or deletion help</h2><p>Use the existing <a href="https://github.com/DeliciousHouse/livechat-xr/issues">GitHub issue route</a>
+for help. Issues are public: never include a private manage link, webhook, OAuth code, email or other private data.</p>
+<p><a href="/terms">Terms and service information</a> · <a href="/">Back</a></p>"""
+
+TERMS = """<h1>Terms and service information</h1>
+<p>LiveChat XR delivers stream chat from TikTok LIVE, Twitch and YouTube to a Discord channel you configure.
+The Windows app provides a separate PC VR overlay. Discord delivery does not guarantee a headset notification.</p>
+<h2>Platform services</h2><p>YouTube API Services are used by the private discovery and channel-proof implementation.
+Use of YouTube is subject to the <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>;
+see also the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.
+Watch links name their destination platform. LiveChat XR is not affiliated with these platforms.</p>
+<h2>Private Pop1 Live test</h2><p>Discovery is separate from the relay. A listing needs explicit consent, proof of channel control
+and separate review. It is free in the private test; a demand tap is not a purchase or a subscription.
+Public activation, TikTok discovery, quota approval and platform-sharing clearance are not claimed by these pages.</p>
+<h2>Your controls</h2><p>Use your private manage page for relay settings and Stop and delete. Use <code>/optout</code>
+or the listing's List me control to remove discovery participation. Already-delivered notifications cannot be recalled.
+Deleting a relay does not cancel an existing paid subscription; use its billing control first.</p>
+<p>This page describes the implemented service and API use; it does not add new waivers or grant new permissions.
+Data handling and retention limitations are in <a href="/privacy">Privacy</a>.
+For help, use the <a href="https://github.com/DeliciousHouse/livechat-xr/issues">existing GitHub issue route</a> without private data.</p>"""
 
 MANAGE = """<h1>Your relay account</h1>{msg}{checklist}
 <section class="box" aria-labelledby="relay-status"><h2 id="relay-status">Channel status</h2>{channels}
@@ -822,6 +865,126 @@ def discord_exchange(code: str) -> str:
         return json.load(r)["webhook"]["url"]
 
 
+def discord_identify(code: str) -> str:
+    """Separate identify flow; neither a webhook nor a posted ID proves an owner."""
+    body = urllib.parse.urlencode({"client_id": DISCORD_ID, "client_secret": DISCORD_SECRET,
+        "grant_type": "authorization_code", "code": code, "redirect_uri": f"{PUBLIC_URL}/network/discord/callback"}).encode()
+    req = urllib.request.Request("https://discord.com/api/oauth2/token", body,
+                                 {"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=10) as response:
+        credential = json.load(response)
+    if credential.get("token_type", "").lower() != "bearer" or not credential.get("access_token"):
+        raise ValueError("identify failed")
+    req = urllib.request.Request("https://discord.com/api/users/@me",
+                                 headers={"Authorization": "Bearer " + credential["access_token"]})
+    with urllib.request.urlopen(req, timeout=10) as response:
+        identity = json.load(response)
+    owner = identity.get("id")
+    if not isinstance(owner, str) or not re.fullmatch(r"\d{1,22}", owner):
+        raise ValueError("identify failed")
+    return owner
+
+
+def listing_profile(r):
+    """Only server-owned association metadata selects a private profile."""
+    if not discovery or not r.get("network_listing"): return None
+    profile = discovery.store.profile(r["network_listing"])
+    if profile and profile["discord_id"] != r.get("network_owner"):
+        raise ValueError("listing ownership conflict")
+    return profile
+
+
+def save_listing_association(r, **fields):
+    before = dict(r)
+    r.update(fields)
+    try: save()
+    except OSError:
+        r.clear(); r.update(before)
+        raise
+
+
+def listing_section(token, r, errors=None, form=None):
+    if not NETWORK_WEB_PRIVATE and not r.get("network_listing"): return ""
+    errors, form = errors or {}, form or {}
+    e = html.escape
+    with lock:
+        for old in set(network_csrf) - regs.keys(): network_csrf.pop(old, None)
+        csrf = network_csrf.setdefault(token, secrets.token_urlsafe(32))
+    try:
+        profile = listing_profile(r)
+        verified = bool(profile and any(c["listing_id"] == profile["id"] and c["verified"]
+                                       for c in discovery.store.channels()))
+    except Exception:
+        return '<section id="network-listing" class="card"><h2>Pop1 Live listing</h2><p>Status: Needs attention</p><p>Listing storage is unavailable. Try again shortly.</p></section>'
+    requested = bool(r.get("network_requested")) and not (profile and profile["review_status"] == "removed")
+    next_step = 1 if not requested else 2 if not profile else 3 if not profile["ign"] else 4 if not verified else 5
+    removed = bool(profile and profile["review_status"] == "removed")
+    state = ("Removed" if removed else "Not requested" if not requested else
+             "Needs attention" if profile and profile["review_status"] not in ("pending", "reviewed") else
+             f"Setting up (step {next_step} of 5)" if next_step < 5 else
+             "Listed when you're live" if profile["review_status"] == "reviewed" else "Waiting for review (within 24h)")
+    def post(action, content):
+        return (f'<form method="post" action="/m/{token}/network"><input type="hidden" name="csrf" value="{csrf}">'
+                f'<input type="hidden" name="action" value="{action}">{content}</form>')
+    def button(label, step):
+        return f'<button class="{"network-next" if next_step == step else "alt"}">{label}</button>'
+    active = requested and not removed
+    consent = post("consent", '<label class="check"><input type="checkbox" name="listed" value="yes"'
+                   + (' checked' if active else '') + (' disabled' if not NETWORK_WEB_PRIVATE and not active else '')
+                   + '>List me in Pop1 Live</label>' + button("Save listing consent", 1))
+    if not NETWORK_WEB_PRIVATE and not active: consent = '<p>New listing requests are paused.</p>'
+    if r.get("network_listing"):
+        consent += post("optout", '<button class="alt">Remove my listing now</button>')
+    link = '<p>Discord identity linked. This is not channel proof.</p>' if profile else (
+        post("link", button("Link Discord", 2)) if next_step == 2 else '<p>Link your own Discord account next.</p>')
+    ign = form.get("ign", profile["ign"] if profile else "")
+    zone = form.get("timezone", profile["timezone"] if profile else "America/Los_Angeles")
+    other = form.get("other_timezone", zone if zone not in dict(network.ZONES).values() else "")
+    options = ''.join(f'<option value="{z}"' + (' selected' if zone == z else '') + '>'
+                      + e(f'{city} · {network.datetime.now(network.ZoneInfo(z)):%H:%M}') + '</option>' for city, z in network.ZONES)
+    options += '<option value="Other"' + (' selected' if zone not in dict(network.ZONES).values() else '') + '>Other</option>'
+    fields = ('<label for="ign">In-game name (required)</label>'
+              f'<input id="ign" name="ign" type="text" required maxlength="64" value="{e(ign)}" aria-describedby="ign-error">'
+              f'<p id="ign-error" class="hint" role="status">{e(errors.get("ign", ""))}</p>'
+              '<label for="timezone">Timezone</label><select id="timezone" name="timezone" aria-describedby="timezone-error">'
+              + options + '</select><div id="other-zone"><label for="other_timezone">Other IANA timezone</label>'
+              f'<input id="other_timezone" name="other_timezone" type="text" value="{e(other)}" aria-describedby="timezone-error">'
+              '<p class="hint">For Other, enter an IANA name such as Pacific/Auckland.</p></div>'
+              f'<p id="timezone-error" class="hint" role="status">{e(errors.get("timezone", ""))}</p>' + button("Save profile", 3))
+    profile_form = post("profile", fields) if profile and requested else '<p>Your game name and local timezone.</p>'
+    proof = ('<p>Channel ownership verified ✓</p>' if verified else
+             '<p>In the private Discord test server, use the account you linked here and run '
+             '<code>/optin platform:Twitch handle:yourchannel</code> or choose YouTube and your @handle. '
+             'The bot gives you a 15-minute code and checks every minute. Return here after verification. '
+             'TikTok discovery is not available.</p>' if next_step == 4 else '<p>Prove control of your Twitch or YouTube channel.</p>')
+    if next_step == 4: proof += post("prove", button("Show proof instructions", 4))
+    review = ('<p>' + e(network.APPROVED if state == "Listed when you're live" else network.PENDING) + '</p>'
+              if next_step == 5 else '<p>A separate founder review follows channel proof.</p>')
+    sections = []
+    for step, (title, content) in enumerate(zip(
+            ("List me", "Link Discord", "In-game name + timezone", "Prove your channel", "Review"),
+            (consent, link, profile_form, proof, review)), 1):
+        done = step < next_step or (step == 5 and state == "Listed when you're live")
+        current = ' aria-current="step"' if step == next_step and next_step < 5 else ''
+        sections.append(f'<div class="step{" later" if step > next_step else ""}"{current}><div class="n">{step}</div>'
+                        f'<div><h2>{"✓ " if done else ""}{title}</h2>{content}</div></div>')
+    return ('<section id="network-listing" class="card"><h2>Pop1 Live listing</h2>'
+            f'<p role="status"><strong>Status: {state}</strong></p><p class="hint">Private test · separate from chat relay · free, no checkout.</p>'
+            + ''.join(sections) + '</section><style>'
+            '#network-listing .step>div:last-child{min-width:0}#network-listing p{overflow-wrap:anywhere}'
+            '#network-listing .later p{color:var(--label)}#network-listing .later .n{background:var(--accent);color:#1a1300}'
+            '#network-listing input[type=text],#network-listing select{border:2px solid var(--faint);min-height:44px;'
+            'width:100%;padding:10px;border-radius:12px;background:var(--bg);color:var(--text);font:inherit}'
+            '#network-listing button,#network-listing .check{min-height:44px;margin-top:10px}'
+            '#network-listing :focus-visible{outline:3px solid var(--focus)}'
+            '#network-listing .hint{color:var(--label)}.site{flex-wrap:wrap;gap:8px}</style>'
+            + ('<script>const z=document.getElementById("timezone"),o=document.getElementById("other-zone");'
+               + ('const local=Intl.DateTimeFormat().resolvedOptions().timeZone;z.value=[...z.options].some(x=>x.value===local)?local:"Other";if(z.value==="Other")document.getElementById("other_timezone").value=local;'
+                  if profile and not profile["ign"] and not form else '')
+               + 'function showZone(){o.hidden=z.value!=="Other";}z.addEventListener("change",showZone);showZone();</script>'
+               if profile and requested else ''))
+
+
 def page(body: str, ga: str = "", event: str = "") -> bytes:
     """ga: the path Google Analytics reports for this page (never the real URL, which can carry a manage token)."""
     head = ""
@@ -900,14 +1063,14 @@ def network_incidents() -> str:
     problems = []
     if not state["enabled"]:
         reason = "missing " + ", ".join(state["missing"]) if state["missing"] else state["error"] or "stopped"
-        problems.append("Discovery network off — " + reason + ". Add missing settings to ~/.livechat-xr.env on Dora, then restart the relay.")
-    else:
-        for platform, source in state["sources"].items():
-            if source["delayed"]:
-                since = source["incident_since"]
-                stamp = network.datetime.fromtimestamp(since, network.PACIFIC).strftime("%H:%M %Z")
-                problems.append(f'{network.SOURCE_NAMES[platform]} data stale since {stamp} ({ago(since)}) — '
-                                + (source["error"] or "waiting for two successful polls"))
+        problems.append("Discovery network off — " + reason + ". Add it to ~/.livechat-xr.env on Dora, then restart the relay.")
+    for platform, source in state["sources"].items():
+        if source["delayed"]:
+            since = source["incident_since"]
+            stamp = network.datetime.fromtimestamp(since, network.PACIFIC).strftime("%I:%M%p").lstrip("0").lower() + " PT"
+            minutes = max(0, int((time.time() - since) / 60))
+            problems.append(f'{network.SOURCE_NAMES[platform]} data stale since {stamp} ({minutes} min ago) — '
+                            + (source["error"] or "waiting for two successful polls") + ".")
     if discovery and discovery.store.path.exists():
         try:
             closed = discovery.store.dm_closed_count()  # HTTP thread, never the relay loop.
@@ -949,15 +1112,32 @@ def admin_body() -> str:
             'th{text-align:left}.network-incidents{border:1px solid var(--error);border-radius:22px;overflow-wrap:anywhere}'
             '.network-incidents p{margin:0 0 12px}.network-incidents ul{margin:0;padding:0;list-style:none}'
             '.network-incidents li span{margin-right:8px}'
-            '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}</style>'
-            + network_incidents() + '<h1>LiveChat XR admin</h1>'
+            '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}'
+            '.admin-table{overflow-x:auto}.admin-table:focus-visible{outline:3px solid var(--focus)}</style>'
+            + network_incidents() + '<h1>LiveChat XR admin</h1>' + network_totals() +
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
             f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
             f'{warn} warnings in the recent log.<br>{backup_line()} <small>Refreshes every 30 s.</small></div>'
+            '<div class="admin-table" tabindex="0" role="region" aria-label="Relay accounts, scroll horizontally for all columns">'
             '<table cellpadding=6 width=100%><tr><th>User</th><th>Channel</th><th>Plan</th><th>Status</th><th>Posts</th>'
-            f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table>'
-            f'<h2>Recent log</h2><table cellpadding=4 width=100%>{logs or "<tr><td>Empty.</td></tr>"}</table>')
+            f'<th>Failed posts</th><th>Joined</th></tr>{"".join(rows) or "<tr><td colspan=7>No sign-ups yet.</td></tr>"}</table></div>'
+            '<h2>Recent log</h2><div class="admin-table" tabindex="0" role="region" aria-label="Recent log, scroll horizontally for all columns">'
+            f'<table cellpadding=4 width=100%>{logs or "<tr><td>Empty.</td></tr>"}</table></div>')
+
+
+def network_totals():
+    try:
+        if discovery is None or not discovery.store.path.exists(): raise ValueError
+        demand = discovery.store.demand()
+        with discovery.store.connect() as db:
+            opted = db.execute("SELECT COUNT(DISTINCT discord_id) FROM listings WHERE opted_in=1 AND discord_id!=''").fetchone()[0]
+        totals = f'Opt-ins: {opted} · Would pay: {demand["total"]} authenticated streamer(s).'
+    except Exception:
+        totals = "Opt-in and demand totals unavailable."
+    return ('<section class="box" aria-label="Private discovery totals"><h2>Private discovery totals</h2><p>' + totals
+            + '</p><p class="hint">Outside-cohort count unavailable — no verified cohort membership. '
+              'E6 visitor measurement unavailable — no threshold passed. A demand tap is not a payment.</p></section>')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -970,14 +1150,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
-        elif self.path.startswith(("/m/", "/recover")):
+        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin")):
             self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Referrer-Policy", "no-referrer")  # manage links carry the token
         self.end_headers()
         self.wfile.write(body)
 
-    def manage(self, token: str, msg: str = "", new: str = "", *, code: int = 200, form=None) -> None:
+    def manage(self, token: str, msg: str = "", new: str = "", *, code: int = 200, form=None, network_errors=None, network_form=None) -> None:
         r = regs.get(token)
         if not r:
             return self.send(404, page(note("That link isn't active. It may have been deleted.", True) + '<p><a href="/">Start over</a></p>'))
@@ -1009,6 +1189,7 @@ class Handler(BaseHTTPRequestHandler):
             billing = '<div class="box"><b>Founder: all your channels free forever.</b> No payment needed.</div>'
         elif plan(r) == "paid" and BILLING_URL:
             billing = f'<p><a href="{html.escape(BILLING_URL)}">Manage billing or cancel</a> (sign in with {html.escape(r["email"])})</p>'
+        listing = listing_section(token, r, network_errors, network_form)
         self.send(code, page(MANAGE.format(
             msg=msg + (note(r["channel_note"]) if r.get("channel_note") else ""), token=token,
             checklist=QUEST_CHECKLIST.format(token=token, open=" open" if new else "",
@@ -1020,12 +1201,14 @@ class Handler(BaseHTTPRequestHandler):
             dname=html.escape(r["discord_channel"]) + (f' · <a href="{open_link}" target="_blank" rel="noopener">Open this channel in Discord</a>'
                                                          if open_link else ""),
             delivery=html.escape(delivery_status(token)),
-            settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing),
-            ga="/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
+            settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing) + listing,
+            ga="" if listing else "/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
             .replace(b'</main>', (PROBE_STATUS.format(status=html.escape(status.get(token, "starting…"))) + '</main>').encode()))
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/network/discord/callback":
+            return self.network_callback()
         if path.startswith("/go/"):
             opaque = path.removeprefix("/go/")
             destination = discovery.resolve_go(opaque) if discovery is not None and "?" not in self.path else None
@@ -1062,6 +1245,8 @@ class Handler(BaseHTTPRequestHandler):
             ga = ("Visits to these pages are counted with Google Analytics (pages viewed, rough location, device type)."
                   if GA_ID else "None.")
             return self.send(200, page(PRIVACY.format(ga=ga), ga="/privacy"))
+        if path == "/terms":
+            return self.send(200, page(TERMS, ga="/terms"))
         if path == "/pretext.js" and PRETEXT:
             return self.send(200, PRETEXT, ctype="text/javascript; charset=utf-8")
         if path == "/health":
@@ -1094,13 +1279,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(raw)
             return
-        n = int(self.headers.get("Content-Length") or 0)
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self.send(400, b"invalid length")
+        if n < 0: return self.send(400, b"invalid length")
         if self.path == "/stripe-webhook" and n <= 512 * 1024:
             return self.stripe(self.rfile.read(n))
         if n > 8192:  # a Google ID token is ~1.2 KB
             return self.send(413, page(note("Too much data.", True)))
         form = {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         path = self.path.split("?")[0]
+        if m := re.fullmatch(r"/m/([\w-]{20,64})/network", path):
+            return self.network_post(m[1], form)
         if path == "/register":
             return self.register(form)
         if path == "/recover":
@@ -1135,6 +1326,107 @@ class Handler(BaseHTTPRequestHandler):
             extra = (f'<div class="box"><b>Your subscription is still active.</b> To stop billing, '
                      f'<a href="{html.escape(BILLING_URL)}">cancel it here</a> (sign in with {html.escape(r["email"])}).</div>')
         self.send(200, page(note("Stopped and deleted. Nothing more will be posted.") + extra + '<p><a href="/">Set up again</a></p>'))
+
+    def network_callback(self):
+        q = parse_qs(self.path.partition("?")[2])
+        with lock:
+            for key, (created, _) in list(network_oauth.items()):
+                if time.monotonic() - created >= 900: network_oauth.pop(key, None)
+            entry = network_oauth.pop(q.get("state", [""])[0], None)
+            r = regs.get(entry[1]) if entry else None
+            if not entry or not NETWORK_WEB_PRIVATE or not r or not r.get("network_requested") or not q.get("code"):
+                return self.send(400, page(note("Discord sign-in expired or was cancelled. Return to your private manage page and try again.", True)))
+            csrf = network_csrf.get(entry[1])
+        try:
+            owner = discord_identify(q["code"][0])
+            with lock:
+                # Recheck after the HTTP exchange: removal/deletion while signing in wins.
+                if (regs.get(entry[1]) is not r or not r.get("network_requested")
+                        or csrf != network_csrf.get(entry[1])):
+                    raise ValueError("registration changed")
+                if not discovery or not discovery.enabled: raise ValueError("discovery unavailable")
+                with discovery.store.guard:
+                    old = listing_profile(r)
+                    if r.get("network_owner") and r["network_owner"] != owner: raise ValueError("owner conflict")
+                    if any(other is not r and other.get("network_owner") == owner for other in regs.values()):
+                        raise ValueError("owner already linked")
+                    profile = discovery.store.owner_listing(owner, create=True)
+                    if old and old["id"] != profile["id"]: raise ValueError("listing conflict")
+                    save_listing_association(r, network_listing=profile["id"], network_owner=owner)
+                    discovery.store.set_listing(profile["id"], opted_in=True)
+        except ValueError:
+            return self.send(409, page(note("Discord identity conflicts with an existing association or setup changed. No accounts were merged. Return to your private manage page.", True)))
+        except Exception:
+            return self.send(503, page(note("Discord identity could not be linked. Return to your private manage page and try again.", True)))
+        return self.send(303, b"", location=f"/m/{entry[1]}")
+
+    def network_post(self, token, form):
+        with lock:
+            r = regs.get(token)
+            action = form.get("action")
+            removal = action == "optout" or (action == "consent" and form.get("listed") != "yes")
+            if not r or (not NETWORK_WEB_PRIVATE and not (r.get("network_listing") and removal)):
+                return self.send(404, page(note("Listing setup is not available.", True)))
+            if (not PUBLIC_URL or self.headers.get("Origin") != PUBLIC_URL
+                    or not network_csrf.get(token) or not secrets.compare_digest(form.get("csrf", ""), network_csrf[token])):
+                return self.send(403, page(note("Request rejected. Reload your private manage page before trying again.", True)))
+            allowed = {"consent": {"listed"}, "optout": set(), "link": set(),
+                       "profile": {"ign", "timezone", "other_timezone"}, "prove": set()}
+            if action not in allowed or not form.keys() <= allowed[action] | {"action", "csrf"}:
+                return self.manage(token, note("Invalid listing action.", True), code=400)
+            if not discovery or not discovery.store.path.exists():
+                return self.manage(token, note("Listing storage is unavailable. Nothing was confirmed; try again.", True), code=503)
+            try:
+                profile = listing_profile(r)
+                if removal:
+                    save_listing_association(r, network_requested=False)
+                    network_csrf[token] = secrets.token_urlsafe(32)  # Invalidates an already-exchanging callback too.
+                    for key, (_, owner_token) in list(network_oauth.items()):
+                        if owner_token == token: network_oauth.pop(key, None)
+                elif action == "consent":
+                    save_listing_association(r, network_requested=True)
+                    if profile: discovery.store.set_listing(profile["id"], opted_in=True)
+                elif action == "link":
+                    if not r.get("network_requested") or not DISCORD_ID or not DISCORD_SECRET or not discovery.enabled:
+                        return self.manage(token, note("Save listing consent first; Discord identity and the private network must be configured.", True), code=409)
+                    for key, (created, owner_token) in list(network_oauth.items()):
+                        if owner_token == token or time.monotonic() - created >= 900: network_oauth.pop(key, None)
+                    if len(network_oauth) >= MAX_REGS: raise ValueError("too many sign-ins")
+                    state = secrets.token_urlsafe(32)
+                    network_oauth[state] = (time.monotonic(), token)
+                    q = urllib.parse.urlencode(dict(client_id=DISCORD_ID, response_type="code", scope="identify",
+                        redirect_uri=f"{PUBLIC_URL}/network/discord/callback", state=state))
+                    return self.send(303, b"", location="https://discord.com/oauth2/authorize?" + q)
+                else:
+                    if not profile or not profile["opted_in"] or not r.get("network_requested"):
+                        return self.manage(token, note("Save listing consent and link your Discord identity first.", True), code=409)
+                    if action == "profile":
+                        zone = form.get("other_timezone", "") if form.get("timezone") == "Other" else form.get("timezone", "")
+                        try:
+                            discovery.store.update_profile(profile["id"], ign=form.get("ign", ""), timezone=zone)
+                        except ValueError as error:
+                            field = "ign" if str(error).startswith("IGN") else "timezone"
+                            return self.manage(token, code=400, network_errors={field: str(error)}, network_form=form)
+                    else:
+                        return self.manage(token, note("Use /optin in the private Discord server with your linked account. Channel proof is checked there, not by this page."))
+            except ValueError:
+                return self.manage(token, note("Listing ownership or state conflicts. No account was taken over.", True), code=409)
+            except Exception:
+                return self.manage(token, note("Listing change could not be confirmed. Reload and try again.", True), code=503)
+        if removal and profile:
+            if not loop.is_running():
+                discovery.store.set_listing(profile["id"], opted_in=False)
+                return self.manage(token, note("Removed locally. Relay loop is stopped; remote edits are not confirmed.", True), code=503)
+            future = asyncio.run_coroutine_threadsafe(discovery.remove_listing(profile["id"]), loop)
+            try:
+                okay = future.result(timeout=10)
+            except TimeoutError:
+                # Do not cancel the shared removal halfway through remote reconciliation.
+                return self.manage(token, note("Removal is still pending. Reload to check; remote edits are not confirmed."), code=202)
+            except Exception:
+                return self.manage(token, note("Removal could not be confirmed. Reload and try Remove my listing now again.", True), code=503)
+            return self.manage(token, note(network.REMOVED if okay else "Removed locally. Some remote edits failed; bounded reconciliation is queued."))
+        return self.manage(token, note("Listing consent saved." if action == "consent" else "Listing profile saved."))
 
     def stripe(self, body: bytes) -> None:
         ev = stripe_event(body, self.headers.get("Stripe-Signature", ""))
