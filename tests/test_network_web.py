@@ -189,7 +189,7 @@ class Web(unittest.TestCase):
         with self.assertRaises(PermissionError):
             asyncio.run_coroutine_threadsafe(review("7"), self.loop).result(3)
         self.signed("review", owner="123", listing=lid, decision="approve")
-        self.wait_payload("you're on")
+        self.wait_payload(network.APPROVED)
         self.net.store.upsert_presence("twitch", [row()], time.time())
         self.assertIn("Listed when you're live", self.manage()[2])
         self.assertEqual(len(self.net.store.discovery()), 1)
