@@ -200,7 +200,7 @@ class Retention(unittest.TestCase):
         self.assertIsNone(store.listing(1))
         self.assertEqual(store.listing(2)["review_status"], "reviewed")
         with store.connect() as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM supplied_channels").fetchone()[0], 0)
             self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='presence'").fetchone())
             self.assertEqual(db.execute("SELECT verified FROM channels").fetchone()[0], 0)
