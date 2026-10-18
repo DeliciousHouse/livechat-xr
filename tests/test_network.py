@@ -224,7 +224,9 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual(request.call_args_list[0], request.call_args_list[1])
         self.assertEqual(request.call_args.args[:2], ("PUT", "/applications/123/guilds/123/commands"))
-        self.assertEqual([c["name"] for c in request.call_args.args[2]], ["network-status"])
+        self.assertEqual([c["name"] for c in request.call_args.args[2]],
+                         ["network-status", "live", "optin", "profile", "optout", "review", "remove"])
+        self.assertNotIn("squad", [c["name"] for c in request.call_args.args[2]])
 
     async def test_stop_joins_inflight_sqlite_work(self):
         entered, release = threading.Event(), threading.Event()
@@ -439,11 +441,13 @@ class Interactions(unittest.TestCase):
     def test_slow_command_ack_then_followup_and_scope(self):
         posted = threading.Event()
         received = []
+        received_paths = []
         async def slow(data):
             await asyncio.sleep(3.1)
             return "finished"
         class Discord(BaseHTTPRequestHandler):
-            def do_POST(self):
+            def do_PATCH(self):
+                received_paths.append(self.path)
                 received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 self.send_response(200)
                 self.end_headers()
@@ -467,13 +471,14 @@ class Interactions(unittest.TestCase):
             self.assertLess(time.monotonic() - start, 3)
             self.assertFalse(posted.is_set())
             self.assertTrue(posted.wait(4))
+            self.assertEqual(received_paths, ["/webhooks/123/synthetic/messages/@original"])
             self.assertEqual(received[0]["content"], "finished")
             self.assertEqual(received[0]["flags"], 68)
             self.assertEqual(self.post(dict(body, guild_id="other"))[0], 403)
             dm = dict(body, id="dm", user={"id": "unauthorized"})
             dm.pop("guild_id")
             self.assertEqual(self.post(dm)[0], 403)
-            self.assertEqual(self.post(dict(body, data={"name": "optin"}))[1]["type"], 4)
+            self.assertEqual(self.post(dict(body, data={"name": "squad"}))[1]["type"], 4)
 
 
 if __name__ == "__main__":

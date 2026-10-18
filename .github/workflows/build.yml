@@ -26,7 +26,7 @@ jobs:
       - name: Linux deployment guards and loopback probe
         run: python -m unittest discover -s tests -p test_deploy.py -v
       - name: Linux discovery and hosted chat isolation
-        run: python -m unittest tests.test_network tests.test_network_operations tests.test_network_backup tests.test_discord_delivery -v
+        run: python -m unittest tests.test_network tests.test_network_operations tests.test_network_surfaces tests.test_network_backup tests.test_discord_delivery -v
 
   build:
     name: windows-build

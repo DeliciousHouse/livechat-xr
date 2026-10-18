@@ -15,10 +15,11 @@ import tarfile
 import tempfile
 import time
 
-DURABLE = {
+DURABLE_V1 = {
     "listings": {"id", "discord_id", "opted_in", "review_status", "dm_closed", "removed_at"},
     "supplied_channels": {"listing_id", "platform", "handle"},
 }
+DURABLE = dict(DURABLE_V1, listings=DURABLE_V1["listings"] | {"ign", "timezone", "alerts_enabled", "would_pay"})
 EPHEMERAL = {
     "channels": {"id", "listing_id", "platform", "platform_id", "handle", "observed_at", "verified"},
     "live_streams": {"channel_id", "stream_id", "title", "viewers", "game", "seen_at", "live"},
@@ -35,7 +36,7 @@ def connect(path, *, readonly=False):
         db.close()
 
 
-def schema(db, expected, version=1):
+def schema(db, expected, version=2):
     if db.execute("PRAGMA user_version").fetchone()[0] != version:
         raise ValueError("unsupported listings schema")
     objects = db.execute("SELECT type,name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").fetchall()
@@ -80,8 +81,10 @@ def sanitize(db, now):
 
 def check_snapshot(path):
     with connect(path, readonly=True) as db:
-        schema(db, DURABLE)
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        schema(db, DURABLE_V1 if version == 1 else DURABLE, version=version if version == 1 else 2)
         integrity(db)
+        return version
 
 
 @contextlib.contextmanager
@@ -143,7 +146,7 @@ def archive(data, output):
                         if f.read(16) == b"SQLite format 3\0": continue
                     tar.add(path, arcname="data/" + relative.as_posix(), recursive=False)
             if has_snapshot: tar.add(data / "listings.snapshot.db", arcname="data/listings.snapshot.db", recursive=False)
-            metadata = json.dumps({"snapshot": has_snapshot, "schema": 1}).encode()
+            metadata = json.dumps({"snapshot": has_snapshot, "schema": 2}).encode()
             info = tarfile.TarInfo("data/network-backup.json")
             info.size, info.mode = len(metadata), 0o600
             tar.addfile(info, io.BytesIO(metadata))
@@ -161,7 +164,7 @@ def check_archive(path):
             if any(excluded(part) for part in Path(member.name).parts[1:]) and member.name not in ("data/listings.snapshot.db", "data/network-backup.json"):
                 raise ValueError("raw or old listings database in archive")
         with tar.extractfile("data/network-backup.json") as f: metadata = json.load(f)
-        if metadata not in ({"snapshot": True, "schema": 1}, {"snapshot": False, "schema": 1}):
+        if metadata not in tuple({"snapshot": present, "schema": version} for present in (True, False) for version in (1, 2)):
             raise ValueError("invalid backup manifest")
         present = "data/listings.snapshot.db" in names
         if present != metadata["snapshot"]: raise ValueError("missing or unexpected snapshot")
@@ -170,7 +173,7 @@ def check_archive(path):
                 target = Path(tmp) / "snapshot.db"
                 with tar.extractfile("data/listings.snapshot.db") as src, target.open("wb") as dst:
                     shutil.copyfileobj(src, dst)
-                check_snapshot(target)
+                if check_snapshot(target) != metadata["schema"]: raise ValueError("snapshot version does not match manifest")
         return present
 
 

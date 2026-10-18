@@ -1026,6 +1026,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path.startswith("/go/"):
+            opaque = path.removeprefix("/go/")
+            destination = discovery.resolve_go(opaque) if discovery is not None and "?" not in self.path else None
+            self.send_response(302 if destination else 404)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Referrer-Policy", "no-referrer")
+            if destination: self.send_header("Location", destination)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/":
             return self.send(200, home())
         if path == "/recover":
@@ -1268,6 +1278,7 @@ class Handler(BaseHTTPRequestHandler):
                   f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}" + ("&moved=1" if moved_from else ""))
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
+        if self.path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
         log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
 
 
