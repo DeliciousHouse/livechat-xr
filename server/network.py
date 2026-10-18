@@ -24,7 +24,7 @@ import chat
 import backup
 
 log = logging.getLogger("network")
-REQUIRED = ("DISCORD_BOT_TOKEN", "DISCORD_PUBLIC_KEY", "DISCORD_CLIENT_ID", "TWITCH_CLIENT_ID",
+REQUIRED = ("DISCORD_BOT_TOKEN", "DISCORD_PUBLIC_KEY", "POP1_LIVE_APPLICATION_ID", "TWITCH_CLIENT_ID",
             "TWITCH_CLIENT_SECRET", "YOUTUBE_API_KEY", "POP1_LIVE_GUILD_ID", "POP1_LIVE_CHANNEL_ID",
             "POP1_LIVE_FOUNDER_ID")
 INTERVALS = {"twitch": 300, "youtube": 900}
@@ -713,7 +713,7 @@ class Network:
     async def register_commands(self):
         while not self.stopping.is_set():
             try:
-                await self.discord("PUT", f'/applications/{self.config["DISCORD_CLIENT_ID"]}/guilds/{self.config["POP1_LIVE_GUILD_ID"]}/commands', COMMANDS)
+                await self.discord("PUT", f'/applications/{self.config["POP1_LIVE_APPLICATION_ID"]}/guilds/{self.config["POP1_LIVE_GUILD_ID"]}/commands', COMMANDS)
                 return
             except asyncio.CancelledError:
                 raise
@@ -818,7 +818,7 @@ class Network:
             if not isinstance(previous, list): raise ValueError("invalid message history")
             for item in previous:
                 text = item.get("content", "")
-                if item.get("author", {}).get("id") == self.config["DISCORD_CLIENT_ID"] and (
+                if item.get("author", {}).get("id") == self.config["POP1_LIVE_APPLICATION_ID"] and (
                         text.startswith("**Pop1 Live**") or text.startswith("No small Pop1 streams")
                         or text.startswith("The list updates") or text.startswith("Pop1 Live is paused")
                         or text.startswith("⚠ ")):
@@ -959,7 +959,7 @@ class Network:
         return True
 
     async def edit_original(self, body, payload):
-        await self.discord("PATCH", f'/webhooks/{self.config["DISCORD_CLIENT_ID"]}/{body["token"]}/messages/@original', payload)
+        await self.discord("PATCH", f'/webhooks/{self.config["POP1_LIVE_APPLICATION_ID"]}/{body["token"]}/messages/@original', payload)
 
     async def begin_challenge(self, body, owner, fields, listing):
         platform, supplied = fields.get("platform"), fields.get("handle")
@@ -1095,7 +1095,7 @@ class Network:
                 if body["guild_id"] != self.config["POP1_LIVE_GUILD_ID"]: return 403, {}
             elif user.get("id") != self.config["POP1_LIVE_FOUNDER_ID"] and body.get("type") != 3:
                 return 403, {}
-            if body.get("application_id") != self.config["DISCORD_CLIENT_ID"]: return 403, {}
+            if body.get("application_id") != self.config["POP1_LIVE_APPLICATION_ID"]: return 403, {}
             if not isinstance(user.get("id"), str) or not re.fullmatch(r"\d{1,22}", user["id"]): return 403, {}
             kind = body.get("type")
             if kind not in (2, 3, 4) or (kind != 3 and body.get("data", {}).get("name") not in {c["name"] for c in COMMANDS}):

@@ -8,11 +8,11 @@ This is the T8–T10/T13/T16 foundation, not Stage 1 activation. Hosted chat and
 
 Required configuration names (values must never appear in logs):
 
-- `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `DISCORD_CLIENT_ID`
+- `DISCORD_BOT_TOKEN`, `DISCORD_PUBLIC_KEY`, `POP1_LIVE_APPLICATION_ID`
 - `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `YOUTUBE_API_KEY`
 - `POP1_LIVE_GUILD_ID`, `POP1_LIVE_CHANNEL_ID`, `POP1_LIVE_FOUNDER_ID`
 
-An absent name keeps discovery off and logs names only; hosted chat still starts. Invalid public-key/storage initialization also fails discovery closed. Use the existing application/client ID and private test guild; no global commands are registered. The only supported command is `/network-status`. Unknown/staged commands receive an explicit unavailable response, never a fabricated opt-in confirmation. OAuth settings are not changed.
+An absent name keeps discovery off and logs names only; hosted chat still starts. Invalid public-key/storage initialization also fails discovery closed. `POP1_LIVE_APPLICATION_ID` identifies the separate Pop1 bot application for guild commands, signed interactions, list ownership and follow-ups. It never falls back to the relay's `DISCORD_CLIENT_ID`; keep that OAuth client and `DISCORD_CLIENT_SECRET` unchanged for Connect Discord and the identify callback. Use only the private test guild; no global commands are registered. The original foundation supported only `/network-status`; the private surfaces extend this as documented in [network web](network-web.md). Unknown/staged commands receive an explicit unavailable response, never a fabricated opt-in confirmation.
 
 `POST /discord/interactions` accepts at most 64 KiB and verifies Ed25519 over timestamp + raw bytes before parsing JSON; timestamps older/newer than five minutes are rejected. PING returns PONG. Commands require the configured guild or founder identity in DMs, plus the configured application ID. Supported commands ACK ephemerally before async work, then send an ephemeral follow-up. A bounded five-minute interaction-ID cache prevents duplicate follow-ups in one process; this is not durable command idempotency. Future state-changing commands must additionally deduplicate transactionally.
 
