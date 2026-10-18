@@ -401,10 +401,26 @@ class Store:
             return db.execute("SELECT COUNT(*) FROM listings WHERE dm_closed=1").fetchone()[0]
 
 
+DISCORD_OPERATIONS = (
+    ("PATCH", r"/webhooks/[^/]+/[^/]+/messages/@original", "edit_original"),
+    ("PUT", r"/applications/[^/]+/guilds/[^/]+/commands", "register_commands"),
+    ("POST", r"/users/@me/channels", "open_dm"),
+    ("POST", r"/channels/[^/]+/messages", "create_message"),
+    ("PATCH", r"/channels/[^/]+/messages/[^/]+", "edit_message"),
+    ("GET", r"/channels/[^/]+/messages\?.*", "list_messages"),
+)
+
+
 class HTTPFailure(Exception):
-    def __init__(self, status, retry_after=0, quota=False):
+    def __init__(self, status, retry_after=0, quota=False, *, operation=None, discord_code=None):
         self.status, self.retry_after, self.quota = status, retry_after, quota
-        super().__init__(f"HTTP {status}" + (" quota" if quota else ""))
+        self.discord_code = discord_code if type(discord_code) is int and 0 <= discord_code <= 2147483647 else None
+        self.operation = operation if operation in {op for _, _, op in DISCORD_OPERATIONS} else "other"
+        if operation is not None:
+            self.status = status if type(status) is int and 100 <= status <= 599 else None
+            super().__init__(f"Discord operation={self.operation} status={self.status} code={self.discord_code}")
+        else:
+            super().__init__(f"HTTP {status}" + (" quota" if quota else ""))
 
 
 def retry_delay(value):
@@ -702,13 +718,18 @@ class Network:
     async def discord(self, method, path, payload):
         for attempt in range(4):
             code, body = await self.offload(self._discord, method, path, payload)
+            error = body if isinstance(body, dict) else {}
             if code == 429 and attempt < 3:
-                await wait_retry(retry_delay(body.get("retry_after", 60)))
+                await wait_retry(retry_delay(error.get("retry_after", 60)))
                 continue
-            if isinstance(body, dict) and body.get("code") == 50007:
+            if error.get("code") == 50007:
                 return {"dm_closed": True}
             if not 200 <= code < 300:
-                raise HTTPFailure(code)
+                operation = next((op for verb, pattern, op in DISCORD_OPERATIONS
+                                  if method == verb and re.fullmatch(pattern, path)), "other")
+                failure = HTTPFailure(code, operation=operation, discord_code=error.get("code"))
+                log.warning("%s", failure)
+                raise failure
             return body
 
     async def register_commands(self):

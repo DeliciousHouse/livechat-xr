@@ -35,6 +35,20 @@ Each operation opens/closes its own SQLite connection; writes are transactional,
 
 `Network.discord` retries 429 at most three times using nonblocking waits. `send_dm(listing_id, text)` prefixes Pop1 Live, persists Discord 50007 and suppresses subsequent automatic attempts for that listing, including after restart. Other failures propagate to the owning task's sanitized handler. `message(text)` escapes markdown and neutralizes mentions, always supplies `allowed_mentions`. Its optional `viewer_role` is reserved for a later explicit, configured viewer-role send; no active command/list/ping calls it. No arbitrary user/role/everyone mentions are permitted.
 
+### Safe Discord rejection evidence
+
+Failed shared Discord requests emit only `Discord operation=<label> status=<HTTP status> code=<Discord code or None>`.
+Labels are fixed: `edit_original`, `register_commands`, `open_dm`, `create_message`,
+`edit_message`, `list_messages`, or `other`. Discord codes must be nonnegative
+32-bit JSON integers (not strings, booleans or floats); absent, malformed and non-JSON
+errors report `None`. URLs, tokens, headers, payloads and upstream reason/message text
+are never included. Existing 50007 closed-DM behavior and three bounded 429 retries remain.
+
+This instrumentation does not diagnose or repair the private `/live` rejection by
+itself. After reviewed-main deployment, the existing private retest must supply the
+safe operation/status/code and confirm the registered command stops thinking and
+shows an answer. Local fake-transport success is not that acceptance.
+
 ## Requirement → runnable proof
 
 Run with Python 3.12 and PyNaCl 1.6.0 (server/test dependency only):
@@ -57,6 +71,9 @@ Run with Python 3.12 and PyNaCl 1.6.0 (server/test dependency only):
 | T13 E3 actual 5s production-scheduled blocking collector; independent thread emission/post clocks, every line <0.5s while blocked | `Delivery.test_hosted_blocking_collector_keeps_each_line_under_half_second` |
 | T13 E4 raising collector and every missing config: hosted mixed-platform 10/10 within 2s | `Delivery.test_hosted_crashing_collector_delivers_ten_within_two_seconds`, `test_hosted_missing_each_secret_delivers_ten_within_two_seconds` |
 | T16 markdown/mentions, explicit role-only payload, 429 wait, persistent 50007/no retry | `Runtime.test_discord_mentions_retry_and_closed_dm` |
+| Safe failure codes, malformed/non-JSON errors and credential-like sentinel exclusion | `Runtime.test_discord_failure_diagnostics_are_bounded_and_secret_free` |
+| Shared-caller operation allowlist and malformed 429 retry exhaustion | `Runtime.test_discord_operation_labels_and_retry_exhaustion` |
+| Signed `/live` ACK, actual command/render/edit-original Request, success and safe rejection | `Interactions.test_signed_live_completion_request_and_safe_rejection` (local fake transport, not live Discord) |
 
 The existing hosted mixed-burst fixture is shared by the isolation cases and retains its two-post baseline. A negative probe replacing collector offload with an inline call fails the blocking case (TimeoutError); it does not falsely pass on a frozen-loop clock. No live accounts or production state are used.
 

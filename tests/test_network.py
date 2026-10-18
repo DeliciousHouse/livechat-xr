@@ -218,6 +218,66 @@ class Runtime(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.call_count, 1)
         self.assertTrue(self.net.store.listing(lid)["dm_closed"])
 
+    async def test_discord_failure_diagnostics_are_bounded_and_secret_free(self):
+        # protects: safe rejection evidence; fails_when: upstream text/code leaks or is lost;
+        # no_claim: these synthetic errors do not identify the live Discord rejection.
+        sentinel = "credential-SENTINEL"
+        path = f"/webhooks/123/{sentinel}/messages/@original"
+        self.net.config["DISCORD_BOT_TOKEN"] = sentinel
+        errors = [({"code": 50035, "message": sentinel, "errors": {sentinel: sentinel}}, 50035),
+                  ({"code": sentinel}, None), ({"code": True}, None), ({"code": -1}, None),
+                  ({"code": 1.5}, None), ({"code": 2 ** 80}, None), ({"code": "50035"}, None),
+                  ([sentinel], None), (None, None)]
+        for body, expected in errors:
+            raw = json.dumps(body).encode()
+            with self.subTest(body=body), self.assertLogs("network", level="WARNING") as logs, \
+                    mock.patch.object(network.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(
+                        "https://discord.com/api/v10" + path, 400, sentinel,
+                        {"Authorization": sentinel}, io.BytesIO(raw))):
+                with self.assertRaises(network.HTTPFailure) as raised:
+                    await self.net.discord("PATCH", path, network.authored(sentinel, ephemeral=True))
+            error = raised.exception
+            self.assertEqual(error.status, 400)
+            self.assertEqual(error.discord_code, expected)
+            self.assertEqual(error.operation, "edit_original")
+            self.assertEqual(str(error), f"Discord operation=edit_original status=400 code={expected}")
+            self.assertEqual(logs.output, ["WARNING:network:" + str(error)])
+            self.assertNotIn(sentinel, " ".join(logs.output) + str(error) + repr(error))
+        for raw in (b"not JSON credential-SENTINEL", b"\xff"):
+            with self.subTest(raw=raw), self.assertLogs("network", level="WARNING") as logs, \
+                    mock.patch.object(network.urllib.request, "urlopen", side_effect=urllib.error.HTTPError(
+                        "https://discord.com/" + sentinel, 502, sentinel, {}, io.BytesIO(raw))):
+                with self.assertRaises(network.HTTPFailure) as raised:
+                    await self.net.discord(sentinel, "/" + sentinel, None)
+            self.assertEqual(str(raised.exception), "Discord operation=other status=502 code=None")
+            self.assertEqual(logs.output, ["WARNING:network:" + str(raised.exception)])
+
+    async def test_discord_operation_labels_and_retry_exhaustion(self):
+        # protects: all shared callers and bounded retries; fails_when: paths become labels
+        # or a malformed 429 escapes diagnostics; no_claim: no live Discord requests.
+        for method, path, operation in (
+                ("PUT", "/applications/123/guilds/123/commands", "register_commands"),
+                ("POST", "/users/@me/channels", "open_dm"),
+                ("POST", "/channels/123/messages", "create_message"),
+                ("PATCH", "/channels/123/messages/456", "edit_message"),
+                ("GET", "/channels/123/messages?limit=100&before=456", "list_messages"),
+                ("POST", "/secret-SENTINEL", "other")):
+            with self.subTest(operation=operation), self.assertLogs("network", level="WARNING") as logs, \
+                    mock.patch.object(self.net, "_discord", return_value=(400, {"code": 50035})):
+                with self.assertRaises(network.HTTPFailure) as raised:
+                    await self.net.discord(method, path, None)
+            self.assertEqual(str(raised.exception), f"Discord operation={operation} status=400 code=50035")
+            self.assertEqual(logs.output, ["WARNING:network:" + str(raised.exception)])
+        with self.assertLogs("network", level="WARNING") as logs, \
+                mock.patch.object(self.net, "_discord", return_value=(429, ["secret-SENTINEL"])) as request, \
+                mock.patch.object(network, "wait_retry", new=mock.AsyncMock()) as wait:
+            with self.assertRaises(network.HTTPFailure) as raised:
+                await self.net.discord("PATCH", "/webhooks/123/secret-SENTINEL/messages/@original", None)
+        self.assertEqual(request.call_count, 4)
+        self.assertEqual(wait.await_args_list, [mock.call(60)] * 3)
+        self.assertEqual(str(raised.exception), "Discord operation=edit_original status=429 code=None")
+        self.assertEqual(logs.output, ["WARNING:network:" + str(raised.exception)])
+
     async def test_registration_is_private_and_idempotent(self):
         self.net.config["POP1_LIVE_APPLICATION_ID"] = "456"
         with mock.patch.object(self.net, "_discord", return_value=(200, network.COMMANDS)) as request:
@@ -469,6 +529,56 @@ class Interactions(unittest.TestCase):
                 return response.status, json.load(response)
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
+
+    def test_signed_live_completion_request_and_safe_rejection(self):
+        # protects: signed ACK -> real /live -> actual edit-original Request contract;
+        # fails_when: PATCH/headers/body/privacy or rejection diagnostics regress;
+        # no_claim: the local urlopen fake is not live Discord acceptance or a root fix.
+        self.net.store.initialize()
+        self.net.config["POP1_LIVE_APPLICATION_ID"] = "456"
+        original_urlopen = urllib.request.urlopen
+        async def drain():
+            await asyncio.gather(*list(self.net.tasks))
+        for status in (200, 400):
+            requests = []
+            def transport(req, *, timeout):
+                if not req.full_url.startswith("https://discord.com/"):
+                    return original_urlopen(req, timeout=timeout)
+                requests.append((req, timeout, threading.get_ident()))
+                if status != 200:
+                    raise urllib.error.HTTPError(req.full_url, status, "reason-SENTINEL",
+                        {"Authorization": "header-SENTINEL"}, io.BytesIO(
+                            b'{"code":50035,"message":"body-SENTINEL"}'))
+                response = mock.MagicMock()
+                response.__enter__.return_value.status = 200
+                response.__enter__.return_value.read.return_value = b'{}'
+                return response
+            body = dict(type=2, id=f"live{status}", application_id="456", token="token-SENTINEL",
+                        guild_id="123", member={"user": {"id": "7"}}, data={"name": "live"})
+            capture = self.assertNoLogs("network", level="WARNING") if status == 200 else self.assertLogs("network", level="WARNING")
+            with self.subTest(status=status), capture as logs, \
+                    mock.patch.object(network.urllib.request, "urlopen", side_effect=transport):
+                self.assertEqual(self.post(body), (200, {"type": 5, "data": {"flags": 64}}))
+                asyncio.run_coroutine_threadsafe(drain(), self.loop).result(4)
+            self.assertEqual(len(requests), 1)
+            req, timeout, worker = requests[0]
+            self.assertIsInstance(req, urllib.request.Request)
+            self.assertEqual(req.full_url, "https://discord.com/api/v10/webhooks/456/token-SENTINEL/messages/@original")
+            self.assertEqual(req.get_method(), "PATCH")
+            self.assertEqual(req.get_header("Content-type"), "application/json")
+            self.assertEqual(req.get_header("User-agent"), "DiscordBot (https://livechat.deliciouswines.org, 1.0)")
+            self.assertIsNone(req.get_header("Authorization"))
+            self.assertEqual(timeout, 10)
+            self.assertNotEqual(worker, self.thread.ident)
+            payload = json.loads(req.data)
+            self.assertIn("No small Pop1 streams live right now", payload["content"])
+            self.assertEqual(payload["allowed_mentions"], {"parse": []})
+            self.assertEqual(payload["flags"], 68)
+            if status != 200:
+                self.assertEqual(logs.output, [
+                    "WARNING:network:Discord operation=edit_original status=400 code=50035",
+                    "WARNING:network:Discord follow-up: HTTPFailure"])
+                self.assertNotIn("SENTINEL", " ".join(logs.output))
 
     def test_real_signature_ping_and_invalid_payloads(self):
         self.assertEqual(self.post({"type": 1}), (200, {"type": 1}))
