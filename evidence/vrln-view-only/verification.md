@@ -75,3 +75,25 @@ this evidence. Dora's next receipt is the reviewed exact commit, distinct QA zip
 and hash receipt, safety result, manifest and later approved runtime-isolation
 mapping. The implementation does not alter E/F/F1/G, identity/device custody,
 reserved commitments or scheduled wakeups. No additional review/job/card created.
+
+## Authorized test-clock correction
+
+Dev-lead reviewed the initial launcher/ingress/bind/package contract with no
+defect found, then authorized only a shared test-clock correction after exact-head
+CI reproduced two failures and one error in `tests/test_network_surfaces.py`.
+`Surfaces.asyncSetUp` now pins wall time to its existing `evening()` fixture before
+Network creation, initialization and enrollment; unittest restores the clock after
+owned async cleanup. Implicit owner-lookup expiry and explicit presence timestamps
+now share one clock. No production expiry behavior or assertions changed; nested
+wall-clock overrides, explicit staleness/expiry times and monotonic proof expiry
+remain exercised.
+
+Local red: the original 17 surface tests reproduced the same two failures/one error.
+Green: `python -m unittest tests.test_network_surfaces tests.test_qa_network_fixture
+tests.test_qa_fixtures.RelayFixture tests.test_network_web -v` ran 29 tests, all passed.
+One initial combined command used the nonexistent selector `Relay`; corrected to
+the documented `RelayFixture` before recording this result. `npm run verify` still
+reports Missing script: "verify". `git diff --check` passes. Critical then
+informational checklist: no open findings; scope is the authorized test clock and
+this evidence addendum only. Exact-new-head CI and regenerated package receipt
+are separate handoff evidence, not implied by these local results.

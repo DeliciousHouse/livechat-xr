@@ -94,10 +94,12 @@ class Profiles(unittest.IsolatedAsyncioTestCase):
 
 class Surfaces(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.now = evening()
+        # Enrollment's implicit expiry checks must share the presence fixture clock.
+        self.enterContext(mock.patch.object(network.time, "time", side_effect=lambda: self.now))
         await foundation.Runtime.asyncSetUp(self)
         self.net.store.initialize()
         self.net.enabled = True
-        self.now = evening()
         self.net.discord = mock.AsyncMock(return_value={"id": "message"})
         self.presences = {p: {} for p in network.INTERVALS}
 
