@@ -1,0 +1,25 @@
+{
+  "artifact": "LiveChatXR-Network-ViewOnly-<commit>.zip",
+  "purpose": "SYNTHETIC VIEW-ONLY source QA; not production, live delivery or F acceptance",
+  "python": "3.12",
+  "dependencies": ["PyNaCl==1.6.0", "tzdata==2026.5"],
+  "files": [
+    "tools/qa_relay.py",
+    "tools/qa-network-manifest.json",
+    "app/chat.py",
+    "server/server.py",
+    "server/network.py",
+    "server/backup.py",
+    "server/pretext.js",
+    "tests/test_qa_network_fixture.py",
+    "docs/qa-fixtures.md",
+    "evidence/vrln-view-only/verification.md"
+  ],
+  "safety_command": "python -m unittest discover -s tests -p test_qa_network_fixture.py -v",
+  "launcher": "python tools/qa_relay.py --network-fixture --scenario normal --port 0",
+  "bind": "127.0.0.1 only; no override; not container-publish compatible",
+  "state": "owned TemporaryDirectory only; context exit cleanup; no production volume",
+  "network": "no Network.start; no providers; urllib denied; browser CSP default-src none",
+  "runtime_disposition": "not provisioned; reviewed commit/artifact, safety result and isolation mapping required by Dora",
+  "receipt": ["source_commit", "file_sha256", "resolved_dependencies", "safety_command", "safety_exit_code"]
+}
