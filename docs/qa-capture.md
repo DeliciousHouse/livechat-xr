@@ -141,7 +141,13 @@ with another 5-second join bound. Process identities use PID plus Linux starttim
 and pidfds; only recorded owned descendants are signalled/reaped. Discovery has
 a 512-task inspection ceiling, not an OS task quota. Reused PID identity refuses
 signalling. Cancellation still goes through finalization; no detached tasks or
-cancel-and-forget are used. Output is copied only after browser cleanup and
+cancel-and-forget are used. A post-launch setup/inspection failure is fatal: no
+pidfd retry or capture follows. The sole synchronous Popen owner still terminates
+and waits for its direct, unreaped child (TERM/5 seconds, then KILL/5 seconds);
+that unreaped child cannot have a reused PID. This fallback never targets
+discovered descendants. Receipts distinguish `direct_child_joined` from `joined`:
+without complete descendant evidence `joined` stays false, and the invocation
+fails even when the direct child was reaped. Output is copied only after browser cleanup and
 fixture listener/loop shutdown evidence.
 
 The parent deadline may terminate the sandbox when ordinary cleanup cannot finish.

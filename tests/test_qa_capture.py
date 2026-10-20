@@ -220,6 +220,78 @@ class Capture(unittest.TestCase):
                 self.assertTrue(process.stderr.closed)
                 self.assertIn(mock.call(20), self.deadline.call_args_list)
 
+    def test_post_launch_setup_failure_reaps_child_and_records_failure(self):
+        for phase in ("pidfd", "identity", "identity-recheck", "namespace"):
+            process = mock.Mock(pid=123, returncode=None)
+            process.stdout, process.stderr = io.BytesIO(), io.BytesIO()
+            process.poll.return_value = None
+            process.wait.side_effect = [capture.subprocess.TimeoutExpired("fixed", 5), -9]
+            def inspect(pid):
+                if phase in ("identity", "identity-recheck"):
+                    raise OSError("inspection unavailable")
+                return {"pid": pid, "start": "42"}
+            record = {}
+            with self.subTest(phase=phase), \
+                    mock.patch.object(capture.subprocess, "Popen", return_value=process), \
+                    mock.patch.object(capture.os, "pidfd_open", create=True,
+                        side_effect=OSError("persistent pidfd failure") if phase == "pidfd" else None,
+                        return_value=42) as pidfd, \
+                    mock.patch.object(capture.signal, "pidfd_send_signal", create=True) as send, \
+                    mock.patch.object(capture, "identity", side_effect=inspect), \
+                    mock.patch.object(capture, "namespaces", side_effect=OSError("namespace unavailable")), \
+                    mock.patch.object(capture, "remember_descendants"), \
+                    mock.patch.object(capture.os, "close"), \
+                    mock.patch.object(capture, "drain") as drain:
+                if phase == "identity-recheck":
+                    capture.identity.side_effect = [{"pid": 123, "start": "42"}, OSError(), OSError()]
+                with self.assertRaises(OSError):
+                    capture.run_owned(["fixed"], timeout=20, record=record)
+                self.assertLessEqual(pidfd.call_count, 1)
+                process.terminate.assert_called_once()
+                process.kill.assert_called_once()
+                self.assertEqual(process.wait.call_args_list, [mock.call(timeout=5), mock.call(timeout=5)])
+                self.assertTrue(record["direct_child_joined"])
+                self.assertFalse(record["joined"])
+                send.assert_not_called()
+                drain.assert_not_called()
+                self.assertTrue(process.stdout.closed and process.stderr.closed)
+
+    def test_setup_failure_preserves_failed_parent_receipt(self):
+        process = mock.Mock(pid=123, returncode=-15)
+        process.stdout, process.stderr = io.BytesIO(), io.BytesIO()
+        process.poll.return_value = None
+        with mock.patch.object(capture.subprocess, "Popen", return_value=process), \
+                mock.patch.object(capture.os, "pidfd_open", side_effect=OSError(), create=True) as pidfd, \
+                mock.patch.object(capture.signal, "pidfd_send_signal", create=True), \
+                mock.patch.object(capture, "identity", return_value={}), \
+                mock.patch.object(capture, "namespaces", return_value={}), \
+                mock.patch.object(capture, "preflight", return_value=capture.example_plan()), \
+                mock.patch.object(capture, "create_output", return_value=capture.OUTPUT), \
+                mock.patch.object(capture, "write_receipt") as write:
+            self.assertEqual(capture.outside("/approved/plan.json", "0" * 64, "normal"), 1)
+            receipt = write.call_args.args[1]
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["error"], "sandbox-failed")
+            self.assertTrue(receipt["sandbox"]["direct_child_joined"])
+            self.assertFalse(receipt["sandbox"]["joined"])
+            pidfd.assert_called_once_with(123)
+            process.wait.assert_called_once_with(timeout=5)
+
+    def test_direct_child_cleanup_has_finite_failure_and_no_reused_pid_signal(self):
+        process = mock.Mock()
+        process.poll.return_value = 0
+        self.assertTrue(capture.join_direct_child(process))
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        process.reset_mock()
+        process.poll.return_value = None
+        process.terminate.side_effect = ProcessLookupError()
+        process.wait.side_effect = capture.subprocess.TimeoutExpired("fixed", 5)
+        self.assertFalse(capture.join_direct_child(process))
+        process.terminate.assert_called_once()
+        process.kill.assert_called_once()
+        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=5), mock.call(timeout=5)])
+
     def test_fixture_startup_exit_and_live_thread_failures_never_copy(self):
         for phase in ("startup", "exit", "live-thread"):
             srv = mock.Mock(server_port=43123, server_address=("127.0.0.1", 43123))

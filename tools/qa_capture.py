@@ -422,6 +422,24 @@ def drain(process, owned, timeout):
     return counts
 
 
+def join_direct_child(process):
+    # Only this synchronous owner waits for this Popen child. Until reaped, its
+    # PID cannot be reused, even if /proc inspection or pidfd acquisition fails.
+    # Never use this path for discovered descendants or arbitrary numeric PIDs.
+    for stop in (process.terminate, process.kill):
+        if process.poll() is None:
+            try:
+                stop()
+            except ProcessLookupError:
+                pass  # An exited direct child still needs wait/reaping.
+        try:
+            process.wait(timeout=5)
+            return True
+        except subprocess.TimeoutExpired:
+            pass
+    return False
+
+
 def run_owned(argv, *, timeout, record=None):
     require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"))
     if record is None:
@@ -429,6 +447,7 @@ def run_owned(argv, *, timeout, record=None):
     record.update(joined=False, exit=None, timeout=False)
     process = None
     owned = {}
+    setup_complete = False
     try:
         with deadline(timeout):
             process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -439,6 +458,7 @@ def run_owned(argv, *, timeout, record=None):
             owned[process.pid] = (owned_identity, handle)
             require(identity(process.pid) == owned_identity)
             record["identity"] = dict(owned_identity, namespaces=namespaces(process.pid))
+            setup_complete = True
             counts = drain(process, owned, timeout)
             require(process.returncode == 0)
             record["stream_bytes"] = counts
@@ -449,15 +469,19 @@ def run_owned(argv, *, timeout, record=None):
     finally:
         if process is not None:
             try:
-                # Even setup failure owns the unreaped Popen child; never signal a
-                # reused numeric PID. pidfd failure is fatal, not a sandbox fallback.
-                if not owned:
-                    handle = os.pidfd_open(process.pid)
-                    owned[process.pid] = (identity(process.pid), handle)
-                record["joined"] = join_owned(process, owned)
-                record["descendants"] = [entry[0] for entry in owned.values()]
-                record["exit"] = process.returncode
-                require(record["joined"])
+                try:
+                    if setup_complete:
+                        record["joined"] = join_owned(process, owned)
+                    else:
+                        for _, handle in owned.values():
+                            os.close(handle)
+                finally:
+                    if not record["joined"]:
+                        record["direct_child_joined"] = join_direct_child(process)
+                    record["descendants"] = [entry[0] for entry in owned.values()]
+                    record["exit"] = process.returncode
+                if sys.exc_info()[0] is None:
+                    require(record["joined"])
             finally:
                 process.stdout.close()
                 process.stderr.close()
