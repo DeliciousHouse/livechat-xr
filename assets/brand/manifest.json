@@ -1,0 +1,209 @@
+{
+  "brand": "LiveChat XR",
+  "direction": "Visor App Tile",
+  "primary": "#6D28D9",
+  "phase": "approved export subset imported for source integration; native/deployed acceptance pending",
+  "files": [
+    {
+      "path": "font/OFL.txt",
+      "bytes": 4389,
+      "sha256": "c676351bf8576b9aba743cd5eaa8c0e7ee0d51f805d720447b4df4ddb6a2e416"
+    },
+    {
+      "path": "font/Outfit-ExtraBold.ttf",
+      "bytes": 55188,
+      "sha256": "4909c848866f0a29c7dcc83108073d01ee616a5e5aa078b103431bc07a8bdc3a"
+    },
+    {
+      "path": "png/livechat-xr-1024.png",
+      "bytes": 23951,
+      "sha256": "5fe827751bdb2901b957136667a8ec88d0967647cedf332915297648d806f7be"
+    },
+    {
+      "path": "png/livechat-xr-128.png",
+      "bytes": 2543,
+      "sha256": "50fb5608dca1b1397a8c8b3dc53a52d8dbb008f4e9d1b2e8677bc63385ed3116"
+    },
+    {
+      "path": "png/livechat-xr-16.png",
+      "bytes": 398,
+      "sha256": "be6066d0799ae9c94f9e42b4cb86b016759a478d58df466e5dc336691b338383"
+    },
+    {
+      "path": "png/livechat-xr-256.png",
+      "bytes": 5183,
+      "sha256": "5e5d40092d16b0fe5eb19c1865694bca12ca99cc9953fcd02778b9b0cef27ef3"
+    },
+    {
+      "path": "png/livechat-xr-32.png",
+      "bytes": 728,
+      "sha256": "8b360c4de1d13876c223dcde1a2ba24d76e4ef6b671ece15c7375af1547d03b5"
+    },
+    {
+      "path": "png/livechat-xr-48.png",
+      "bytes": 1145,
+      "sha256": "7fa7b32da10566e9078fd099671977aacd439369c6b6cf51de7728c73a79ab29"
+    },
+    {
+      "path": "png/livechat-xr-512.png",
+      "bytes": 10849,
+      "sha256": "04e24a6400baacb5490989c62b61fa53e4969e810b660b01e879f455e536a344"
+    },
+    {
+      "path": "png/livechat-xr-64.png",
+      "bytes": 1381,
+      "sha256": "89c251478a8b0c520e463aeb4d21d9d333ee814ed10952544b061b9a7ea8a136"
+    },
+    {
+      "path": "png/livechat-xr-lockup-dark.png",
+      "bytes": 16557,
+      "sha256": "05283bdfe41ca318c420bc1099dbab2b188b39f7aef7758b267dc42b398abc94"
+    },
+    {
+      "path": "png/livechat-xr-lockup-light.png",
+      "bytes": 19345,
+      "sha256": "86847e68b713de61711a4d98b4e6354c54cfb49cb1e200a34042366a513c85f7"
+    },
+    {
+      "path": "provenance/approved.json",
+      "bytes": 391,
+      "sha256": "e73904fcf377ce17e801be28e7e7e386d196401962e5496ff493d6490a436c82"
+    },
+    {
+      "path": "provenance/variant-A3.png",
+      "bytes": 1119189,
+      "sha256": "19fc8a0aa102fc2e78f48eb86cefc916d024fcb48374eb21af0bc9fdc4185d0e"
+    },
+    {
+      "path": "social/avatar.svg",
+      "bytes": 605,
+      "sha256": "908afa03b70853458c4656df1047740b93976ea2a3b73091abbd87b4f19f8152"
+    },
+    {
+      "path": "social/discord-avatar-1024.png",
+      "bytes": 16229,
+      "sha256": "f54f367d92c1ac7bed89462a49e2d8e8c71b19cffb2016c236cafda265a3a0ae"
+    },
+    {
+      "path": "social/github-social-preview-1280x640.png",
+      "bytes": 26270,
+      "sha256": "2178110ecc3c0937502130d369e2920984d88fc6f3e0ba8180981bd94716613d"
+    },
+    {
+      "path": "social/github-social-preview.svg",
+      "bytes": 21698,
+      "sha256": "49791fcd38b9098bbf0855c6495fdb825bc34482e7d6195b23ba994e8e6ad2e0"
+    },
+    {
+      "path": "social/reddit-avatar-1024.png",
+      "bytes": 16229,
+      "sha256": "f54f367d92c1ac7bed89462a49e2d8e8c71b19cffb2016c236cafda265a3a0ae"
+    },
+    {
+      "path": "social/tiktok-avatar-1024.png",
+      "bytes": 16229,
+      "sha256": "f54f367d92c1ac7bed89462a49e2d8e8c71b19cffb2016c236cafda265a3a0ae"
+    },
+    {
+      "path": "source/build_brand.py",
+      "bytes": 8311,
+      "sha256": "8057a8d9865cb0068a198c0cd776f22ae6da2dbbc56f5450cee3d2647b8a7f88"
+    },
+    {
+      "path": "source/Outfit-variable.ttf",
+      "bytes": 110884,
+      "sha256": "fc7287273e66929776e2ba54f144fe699080bec29f61bf649d70d871468aeade"
+    },
+    {
+      "path": "source/requirements.txt",
+      "bytes": 49,
+      "sha256": "0088b8af62be0a8bb53bc6dbb7be97443c3de49e21747dee4a5abe8814b9ba1b"
+    },
+    {
+      "path": "svg/livechat-xr-16.svg",
+      "bytes": 539,
+      "sha256": "4cea663525bfb9ca703e3217a82d65529bd9f6a4c65c9ac766bb6f10a0baa3e6"
+    },
+    {
+      "path": "svg/livechat-xr-32.svg",
+      "bytes": 539,
+      "sha256": "085d521213e8a6759925825f33e0fd0859e35e7ba05ebc8a0a0afc30e07a3262"
+    },
+    {
+      "path": "svg/livechat-xr-lockup-dark-background.svg",
+      "bytes": 4661,
+      "sha256": "fa109c42f900795733fa0cdb5082b0376e6bae7f04a03fbf06475124e0294083"
+    },
+    {
+      "path": "svg/livechat-xr-lockup-dark.svg",
+      "bytes": 4614,
+      "sha256": "dc2702e7082caf6e7f7d4600c5478d43a9b1b09ac66f851bdb31daca96f3a469"
+    },
+    {
+      "path": "svg/livechat-xr-lockup-light-background.svg",
+      "bytes": 4661,
+      "sha256": "74104d191d979ad06f08681c869a5a2367f50b4508802c91ca6a8bef2dbeb870"
+    },
+    {
+      "path": "svg/livechat-xr-lockup-light.svg",
+      "bytes": 4614,
+      "sha256": "c41b3a78d6c1ab5d48593beff7afcf9a5c4b59ff5af172d8f62cf1503c651a1c"
+    },
+    {
+      "path": "svg/livechat-xr-mono.svg",
+      "bytes": 510,
+      "sha256": "48e7d6d5cd0114215cc81db82eb5ffd987c7035806dbe5d8b60b48b01946f28e"
+    },
+    {
+      "path": "svg/livechat-xr-violet.svg",
+      "bytes": 510,
+      "sha256": "06a466d8d1ba8889d195654d0971b17a3cf9a62890b5ae016dc594058f5ee5fc"
+    },
+    {
+      "path": "svg/livechat-xr-white.svg",
+      "bytes": 508,
+      "sha256": "6a73cc05a39530c91e6f748d3d2a88f7c476feff454eaa9adad923299ff1a8e5"
+    },
+    {
+      "path": "svg/livechat-xr.svg",
+      "bytes": 563,
+      "sha256": "309ffe5d4a0942628d0e6d47f3cf4f48147b43ad3d36aedc9fe910c02454b9ab"
+    },
+    {
+      "path": "web/apple-touch-icon.png",
+      "bytes": 3798,
+      "sha256": "b2dc285148f09b101443c3879a9840d5c37aad0036ef00ad6e2099b081f74be9"
+    },
+    {
+      "path": "web/discord-avatar.png",
+      "bytes": 7331,
+      "sha256": "c5719b78599d35536ea90dd930b383f43bd7bb9cbae01d28978255399ec3227a"
+    },
+    {
+      "path": "web/favicon.ico",
+      "bytes": 11190,
+      "sha256": "981dd9a98a3ff9f6f82b1b4ae6fa54ec05aedf752069057711c915db6c4dab1c"
+    },
+    {
+      "path": "web/favicon.svg",
+      "bytes": 563,
+      "sha256": "309ffe5d4a0942628d0e6d47f3cf4f48147b43ad3d36aedc9fe910c02454b9ab"
+    },
+    {
+      "path": "web/header-dark.svg",
+      "bytes": 4614,
+      "sha256": "dc2702e7082caf6e7f7d4600c5478d43a9b1b09ac66f851bdb31daca96f3a469"
+    },
+    {
+      "path": "web/header-light.svg",
+      "bytes": 4614,
+      "sha256": "c41b3a78d6c1ab5d48593beff7afcf9a5c4b59ff5af172d8f62cf1503c651a1c"
+    },
+    {
+      "path": "windows/LiveChatXR.ico",
+      "bytes": 11190,
+      "sha256": "981dd9a98a3ff9f6f82b1b4ae6fa54ec05aedf752069057711c915db6c4dab1c"
+    }
+  ],
+  "source_pack_sha256": "dcb61fb5b9282fea6220be2f4fd6407130078269c04c7f815eeace8f1cea6581"
+}

@@ -1,5 +1,9 @@
 # LiveChat XR
 
+![LiveChat XR](assets/brand/svg/livechat-xr-lockup-dark-background.svg)
+
+The approved Visor App Tile assets and their source/licence are in [assets/brand](assets/brand); see the [brand guide](docs/brand.md).
+
 Read TikTok LIVE, Twitch or YouTube chat while playing VR. Choose the path that matches where your game runs.
 
 | Path | How it works | Start here |

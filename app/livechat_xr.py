@@ -15,7 +15,7 @@ from logging.handlers import RotatingFileHandler
 from tkinter import ttk, messagebox
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image
 
 import chat
 
@@ -59,14 +59,14 @@ def set_autostart(on: bool) -> None:
                 pass
 
 
+def brand_path(name: str) -> Path:
+    root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
+    return root / "assets" / "brand" / name
+
+
 def icon_image() -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((4, 8, 60, 44), 10, fill=(124, 77, 255))
-    d.polygon([(16, 42), (30, 42), (14, 58)], fill=(124, 77, 255))
-    for x in (20, 32, 44):
-        d.ellipse((x - 4, 22, x + 4, 30), fill="white")
-    return img
+    with Image.open(brand_path("png/livechat-xr-32.png")) as image:
+        return image.convert("RGBA")
 
 
 class App:
@@ -76,6 +76,7 @@ class App:
         self.cfg = chat.load_config(portable=portable)
         self.ui: queue.Queue = queue.Queue()  # tray thread -> Tk thread
         self.root = tk.Tk()
+        self.root.iconbitmap(default=str(brand_path("windows/LiveChatXR.ico")))
         self.root.withdraw()
         self.win: tk.Toplevel | None = None
         self.icon = pystray.Icon("LiveChatXR", icon_image(), APP, pystray.Menu(
@@ -117,6 +118,7 @@ class App:
             self.win.lift()
             return
         w = self.win = tk.Toplevel(self.root)
+        w.iconbitmap(str(brand_path("windows/LiveChatXR.ico")))
         w.title(f"{APP} settings" + (" — alternate data profile" if self.portable else ""))
         w.resizable(False, False)
         f = ttk.Frame(w, padding=14)
@@ -194,6 +196,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.check:  # packaging smoke test (CI): exit 0 if the bundled deps import
         import TikTokLive.events  # noqa: F401
+        icon_image().close()
+        with Image.open(brand_path("windows/LiveChatXR.ico")) as icon:
+            icon.load()
         return
     if args.data_dir is not None:
         try:

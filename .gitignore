@@ -3,6 +3,7 @@
 build/
 dist/
 *.spec
+!LiveChatXR.spec
 __pycache__/
 layer/*.dll
 layer/*.lib
