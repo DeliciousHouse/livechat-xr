@@ -51,7 +51,8 @@ The outer wrapper's proposed interface is `--plan <absolute-json-file>
 --plan-sha256 <reviewed-sha256> --scenario normal`. Its own interpreter must be the
 same approved QA interpreter, invoked with `-I -B`. Inside bwrap the fixed argv is
 `R/venv/bin/python -I -B R/launch-viewonly --inside normal`. The internal switch is
-not a production launcher flag. It refuses outside Linux namespace PID 1, without
+not a production launcher flag. Before output or fixture work, it refuses outside
+Linux namespace UID 1000 / PID 1, without
 isolated/no-user-site/no-bytecode flags, with an unexpected environment, or if any
 of pid/net/mnt/user namespace IDs equal the creation receipt's parent IDs.
 
@@ -107,7 +108,14 @@ not runtime memory/CPU/filesystem use. The outer lifetime also bounds inspection
 `R/venv/bin/python` exactly; venv Python resolves within QA prefixes. Installed
 runtime bytes, native loader and shebangs must be verified before any invocation.
 
-Preflight requires Linux UID 1000, validates hashes and layout, and checks the
+Outer preflight requires fixed Linux host UID 1001 (`HOST_UID`), not an arbitrary
+non-root actor or caller-selected UID. Host UID 0, 1000 and all other actors refuse
+before plan inspection. Inside bwrap, the fixed `--uid 1000 --gid 1000` mapping is
+unchanged and inner entry explicitly requires namespace-local UID 1000.
+Ownership checks compare to `os.getuid()` in their current namespace: host 1001
+outside, mapped 1000 inside. Shared loader/library/font resource files retain
+their existing ownership exception; no ownership rewrite or account switch occurs.
+Preflight validates hashes and layout, and checks the
 materialized launch file is byte-identical to the reviewed wrapper being run.
 The plan is trusted reviewed input, not a service accepting arbitrary users'
 mount requests. Freeze staged input bytes against concurrent modification for
@@ -184,6 +192,10 @@ thread/listener closure, timestamps and actual PNG path/hash/size/dimensions.
 Parent records independently observed sandbox exit/cleanup and capture hash
 readback. Its failure receipt survives an inner failure where the parent can
 still finalize; neither missing PNG nor missing receipt is synthesized as success.
+
+Existing `uid` fields are namespace-local: creation records host UID 1001 and the
+inner receipt records UID 1000. No receipt schema or runtime API is added by the
+actor compatibility correction (t_c99a32e1, dev-lead contract comment 9892).
 
 Namespace ID comparison and process joins are observations, not blanket isolation
 PASS. Browser sandbox effectiveness, effective loaded policy, hard memory/CPU/

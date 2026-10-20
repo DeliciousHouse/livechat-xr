@@ -35,6 +35,7 @@ SANDBOX = ["/usr/bin/bwrap", "--unshare-all", "--die-with-parent", "--new-sessio
            "--tmpfs", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/qa"]
 TREES = ("python", "venv", "source", "browser")
 FILES = ("launch-viewonly", "config/fonts.conf", "config/nsswitch.conf")
+HOST_UID = 1001
 
 
 class Refused(RuntimeError):
@@ -161,7 +162,7 @@ def read_plan(path):
 
 
 def preflight(path, expected_sha256):
-    require(sys.platform == "linux" and os.getuid() == 1000 and digest_valid(expected_sha256))
+    require(sys.platform == "linux" and os.getuid() == HOST_UID and digest_valid(expected_sha256))
     require(Path(path).resolve(strict=True) == absolute(path))
     body = read_regular(path, RECEIPT_LIMIT)
     require(hashlib.sha256(body).hexdigest() == expected_sha256)
@@ -512,7 +513,7 @@ def verify_inside():
 
 def inside(scenario):
     scenario_valid(scenario)
-    require(sys.platform == "linux" and os.getpid() == 1)
+    require(sys.platform == "linux" and os.getuid() == 1000 and os.getpid() == 1)
     receipt = dict(task=TASK, contract_sha256=CONTRACT, synthetic=True, status="failed", scenario=scenario, started=time.time(),
                    fixture_joined=False, isolation={"browser_sandbox": "unverified", "quotas": "unestablished"})
     srv = None

@@ -97,3 +97,27 @@ reports Missing script: "verify". `git diff --check` passes. Critical then
 informational checklist: no open findings; scope is the authorized test clock and
 this evidence addendum only. Exact-new-head CI and regenerated package receipt
 are separate handoff evidence, not implied by these local results.
+
+## Fixed host / namespace actor correction
+
+Card t_c99a32e1 implements dev-lead contract comment 9892 against main
+df63a89b160d8930216083ad0a4ffd21b5518838. Outer preflight pins host UID 1001;
+inner entry pins namespace UID 1000 before output/fixture effects. Bubblewrap
+UID/GID 1000 and current-namespace ownership comparisons remain unchanged.
+
+Offline red/green: the new checks rejected the old outer UID guard and absence
+of an inner UID guard. The focused capture suite now runs 22 tests: Windows
+Python 3.14.7 passes with four POSIX skips; WSL Linux passes all 22. Matching
+host-owned plan/runtime metadata reaches a deliberate stop before tree inspection,
+not runtime readiness. Inner UID 1000 reaches a deliberate stop before fixture
+work only with the existing PID/environment/namespace/owned-creation contract.
+Foreign input/output/tree ownership, other actors and hash mismatch refuse.
+Existing cleanup failure checks remain intact. No real launch, namespace,
+browser, fixture, acquired-code execution, ownership rewrite or policy read ran.
+
+The unchanged source manifest already includes all four changed files. Generate
+the allowlisted zip and per-file SHA256 receipt from exact committed Git blobs,
+not Windows checkout line endings. That receipt is a review candidate until the
+existing dev-lead/canonical reviewer workflow approves it; source packaging is
+not dependency acquisition, runtime staging, execution approval or F acceptance.
+`npm run verify` remains unavailable (Missing script: "verify").
