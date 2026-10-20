@@ -98,11 +98,6 @@ class Surfaces(unittest.IsolatedAsyncioTestCase):
         # Enrollment's implicit expiry checks must share the presence fixture clock.
         self.enterContext(mock.patch.object(network.time, "time", side_effect=lambda: self.now))
         await foundation.Runtime.asyncSetUp(self)
-        self.now = evening()
-        # Keep implicit retention checks on the same clock as fixture observations.
-        clock = mock.patch.object(network.time, "time", return_value=self.now)
-        clock.start()
-        self.addCleanup(clock.stop)
         self.net.store.initialize()
         self.net.enabled = True
         self.net.discord = mock.AsyncMock(return_value={"id": "message"})
