@@ -95,9 +95,13 @@ class Profiles(unittest.IsolatedAsyncioTestCase):
 class Surfaces(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         await foundation.Runtime.asyncSetUp(self)
+        self.now = evening()
+        # Keep implicit retention checks on the same clock as fixture observations.
+        clock = mock.patch.object(network.time, "time", return_value=self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.net.store.initialize()
         self.net.enabled = True
-        self.now = evening()
         self.net.discord = mock.AsyncMock(return_value={"id": "message"})
         self.presences = {p: {} for p in network.INTERVALS}
 
@@ -112,6 +116,15 @@ class Surfaces(unittest.IsolatedAsyncioTestCase):
         s.set_listing(lid, review_status="reviewed")
         s.update_profile(lid, ign="Naiya", alerts_enabled=True)
         return lid
+
+    async def test_owner_lookup_expires_channels_at_retention_boundary(self):
+        lid = self.enroll()
+        with mock.patch.object(network.time, "time", return_value=self.now + 86399):
+            self.assertEqual(self.net.store.owner_listing("7")["id"], lid)
+            self.assertEqual(len(self.net.store.channels()), 1)
+        with mock.patch.object(network.time, "time", return_value=self.now + 86400):
+            self.assertEqual(self.net.store.owner_listing("7")["id"], lid)
+            self.assertEqual(self.net.store.channels(), [])
 
     async def test_rows_states_staleness_and_overflow(self):
         n = self.net
