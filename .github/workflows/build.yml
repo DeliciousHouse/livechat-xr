@@ -56,10 +56,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Package app
-        run: >
-          pyinstaller --noconfirm --clean --windowed --name LiveChatXR
-          --collect-all TikTokLive --collect-all TikTokLiveProto --collect-submodules EulerApiSdk
-          --paths app app/livechat_xr.py
+        run: pyinstaller --noconfirm --clean LiveChatXR.spec
 
       - name: Smoke-test packaged app
         shell: pwsh

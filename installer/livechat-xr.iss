@@ -22,6 +22,7 @@ OutputDir=..\dist
 OutputBaseFilename=LiveChatXR-Setup-{#AppVersion}
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\brand\windows\LiveChatXR.ico
 CloseApplications=yes
 UninstallDisplayIcon={app}\LiveChatXR.exe
 

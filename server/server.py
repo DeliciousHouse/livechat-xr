@@ -564,6 +564,8 @@ a{color:var(--link)}
 :focus-visible{outline:3px solid var(--focus);outline-offset:2px;border-radius:6px}
 .site{display:flex;justify-content:space-between;align-items:center;max-width:1080px;margin:0 auto;padding:22px 24px;font-size:15px}
 .brand{font-weight:800;color:var(--text);text-decoration:none}
+.brand img{display:block;width:195px;height:auto}
+.site{flex-wrap:wrap;gap:12px}
 .site nav a{color:var(--label);text-decoration:none;margin-left:18px}
 main{max-width:600px;margin:0 auto;padding:20px 20px 60px}
 h1{font-size:32px;line-height:36px;font-weight:800;margin:0 0 14px}
@@ -632,10 +634,13 @@ footer a{color:var(--label)}
 PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
 <title>LiveChat XR for Discord</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
 <style>{css}</style>{head}</head><body>
-<header class="site"><a class="brand" href="/">LiveChat XR</a>
+<header class="site"><a class="brand" href="/"><img src="/brand/header-dark.svg" width="195" height="48" alt="LiveChat XR"></a>
 <nav aria-label="Site"><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
 <main>{body}</main></body></html>"""
 
@@ -1148,6 +1153,8 @@ class Handler(BaseHTTPRequestHandler):
         if location:
             self.send_header("Location", location)
         self.send_header("Content-Type", ctype)
+        if ctype.startswith("image/"):
+            self.send_header("X-Content-Type-Options", "nosniff")
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
         elif self.path.startswith(("/m/", "/recover", "/network/", "/admin")):
@@ -1207,6 +1214,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        # Exact allowlist only: never join request input onto a filesystem path.
+        brand_files = {
+            "/favicon.ico": ("favicon.ico", "image/vnd.microsoft.icon"),
+            "/favicon.svg": ("favicon.svg", "image/svg+xml"),
+            "/apple-touch-icon.png": ("apple-touch-icon.png", "image/png"),
+            "/brand/header-dark.svg": ("header-dark.svg", "image/svg+xml"),
+            "/brand/discord-avatar.png": ("discord-avatar.png", "image/png"),
+        }
+        if path in brand_files:
+            name, mime = brand_files[path]
+            root = Path(__file__).resolve().parent
+            directory = root / "assets/brand/web" if (root / "assets/brand/web").is_dir() else root.parent / "assets/brand/web"
+            try:
+                data = (directory / name).read_bytes()
+            except OSError:
+                return self.send(404, b"Brand resource unavailable", ctype="text/plain; charset=utf-8")
+            return self.send(200, data, ctype=mime)
         if path == "/network/discord/callback":
             return self.network_callback()
         if path.startswith("/go/"):

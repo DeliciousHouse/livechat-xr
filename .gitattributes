@@ -1,0 +1,2 @@
+# Approved export hashes apply to exact bytes on both Windows and Linux.
+assets/brand/** -text

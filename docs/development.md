@@ -67,6 +67,16 @@ Do not submit a real webhook just to check rendering. HTTP registration, update/
 
 ## Build and release
 
+The checked-in [LiveChatXR.spec](../LiveChatXR.spec) is the app packaging source of truth:
+
+```bat
+.venv\Scripts\pyinstaller.exe --noconfirm --clean LiveChatXR.spec
+```
+
+It resolves files from the spec directory, embeds the approved EXE ICO and bundles
+the PNG/ICO resources under `assets/brand` in PyInstaller's runtime directory.
+`--check` checks these resources too, without opening Tk or touching user settings.
+
 The [workflow](../.github/workflows/build.yml) builds the DLL, tests, packages the Windows tray app with PyInstaller, smoke-tests the bundled dependencies, and compiles the Inno installer. Installer source is [livechat-xr.iss](../installer/livechat-xr.iss). `v*` tag builds publish a release; tags containing `-` are pre-releases. Do not push a release tag just to test docs.
 
 The CI/CD card owns exact packaging/release commands, SHA256 publication, Dora deployment and rollback. Use the [canonical runbook](deployment.md) for those procedures rather than duplicating them here.
