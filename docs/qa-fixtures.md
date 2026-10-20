@@ -116,6 +116,13 @@ runtime isolation mapping. Dev-lead contract review plus canonical review/merge
 remain outstanding until the respective lanes act; source tests do not accept F,
 change E/F1/G or establish phone/Quest/operator custody.
 
+### Bounded capture source (not execution approval)
+
+`tools/qa_capture.py` and its mocked checks are packaged as source only. See
+[the capture contract](qa-capture.md) for the exact fixed layout, reviewed-plan
+schema, bounds, receipts and separate runtime approval prerequisites. Do not run
+the capture wrapper, browser or sandbox on the strength of this source archive.
+
 ## Private Discord transport consumer (Q only)
 
 `tools/qa_discord.py` is separate from the simulated relay. It has no CLI arguments

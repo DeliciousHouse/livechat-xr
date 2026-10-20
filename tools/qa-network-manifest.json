@@ -5,6 +5,7 @@
   "dependencies": ["PyNaCl==1.6.0", "tzdata==2026.5"],
   "files": [
     "tools/qa_relay.py",
+    "tools/qa_capture.py",
     "tools/qa-network-manifest.json",
     "app/chat.py",
     "server/server.py",
@@ -12,6 +13,8 @@
     "server/backup.py",
     "server/pretext.js",
     "tests/test_qa_network_fixture.py",
+    "tests/test_qa_capture.py",
+    "docs/qa-capture.md",
     "docs/qa-fixtures.md",
     "evidence/vrln-view-only/verification.md"
   ],
@@ -21,5 +24,7 @@
   "state": "owned TemporaryDirectory only; context exit cleanup; no production volume",
   "network": "no Network.start; no providers; urllib denied; browser CSP default-src none",
   "runtime_disposition": "not provisioned; reviewed commit/artifact, safety result and isolation mapping required by Dora",
-  "receipt": ["source_commit", "file_sha256", "resolved_dependencies", "safety_command", "safety_exit_code"]
+  "receipt": ["source_commit", "file_sha256", "resolved_dependencies", "safety_command", "safety_exit_code"],
+  "capture_source_test": "python -B -m unittest discover -s tests -p test_qa_capture.py -v",
+  "capture_runtime": "SOURCE ONLY; docs/qa-capture.md; separate dev-lead contract review and exact runtime execution disposition required; do not launch from this archive"
 }
