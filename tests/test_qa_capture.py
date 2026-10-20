@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import struct
 import sys
 import tempfile
@@ -66,6 +67,8 @@ class Capture(unittest.TestCase):
         args = capture.sandbox_argv(plan, "/approved/plan.json", "normal")
         self.assertEqual(args[:len(capture.SANDBOX)], capture.SANDBOX)
         self.assertIn("--as-pid-1", args)
+        self.assertEqual(args[args.index("--uid") + 1], "1000")
+        self.assertEqual(args[args.index("--gid") + 1], "1000")
         self.assertNotIn("--share-net", args)
         self.assertNotIn("--no-sandbox", args)
         self.assertEqual(args[-6:], [str(capture.RUNTIME / "venv/bin/python"), "-I", "-B",
@@ -79,6 +82,146 @@ class Capture(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(capture.Refused):
                 capture.validate_plan(altered)
         self.launch.assert_not_called()
+
+    @contextlib.contextmanager
+    def owned_input(self, body, owner):
+        # Simulate OS metadata, not read_regular's UID/type/size checks.
+        def stream(*_):
+            data = io.BytesIO(body)
+            data.fileno = lambda: 41
+            return data
+        info = mock.Mock(st_mode=stat.S_IFREG | 0o600, st_uid=owner,
+                         st_size=len(body), st_ino=42, st_mtime_ns=123)
+        with mock.patch.object(capture.os, "open", return_value=41), \
+                mock.patch.object(capture.os, "fstat", return_value=info), \
+                mock.patch.object(capture.os, "close"), \
+                mock.patch.object(capture.os, "O_NOFOLLOW", 0x20000, create=True), \
+                mock.patch.object(capture.os, "O_NONBLOCK", 0x800, create=True), \
+                mock.patch.object(capture.os, "fdopen", side_effect=stream):
+            yield
+
+    def test_host_uid_and_owned_inputs_before_tree_inspection(self):
+        plan = dict(capture.example_plan(), source_receipt="source-review", execution_disposition="separate-disposition")
+        body = json.dumps(plan).encode()
+        digest = hashlib.sha256(body).hexdigest()
+        path = mock.MagicMock()
+        path.__str__.return_value = "/approved/plan.json"
+        path.resolve.return_value = path
+        path.is_absolute.return_value = True
+        path.lstat.return_value = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=1001)
+        for uid, file_owner, directory_owner, expected_hash, reaches_tree in (
+                (1001, 1001, 1001, digest, True),
+                (0, 0, 0, digest, False), (1000, 1000, 1000, digest, False),
+                (1002, 1002, 1002, digest, False),
+                (1001, 1000, 1001, digest, False), (1001, 1001, 1000, digest, False),
+                (1001, 1001, 1001, "0" * 64, False)):
+            with self.subTest(uid=uid, file_owner=file_owner, directory_owner=directory_owner,
+                              expected_hash=expected_hash), \
+                    mock.patch.object(capture.os, "getuid", return_value=uid, create=True), \
+                    mock.patch.object(capture, "Path", return_value=path), \
+                    self.owned_input(body, file_owner), \
+                    mock.patch.object(capture, "tree_digest", side_effect=RuntimeError("stop before trees")) as tree:
+                path.lstat.return_value.st_uid = directory_owner
+                with self.assertRaisesRegex(RuntimeError, "stop before trees") if reaches_tree else self.assertRaises(capture.Refused):
+                    capture.preflight("/approved/plan.json", expected_hash)
+                self.assertEqual(tree.call_count, int(reaches_tree))
+        self.launch.assert_not_called()
+
+    def test_ownership_remains_namespace_local(self):
+        path = mock.MagicMock()
+        path.resolve.return_value = path
+        path.is_absolute.return_value = True
+        entry = mock.MagicMock()
+        path.rglob.return_value = [entry]
+        entry.relative_to.return_value.as_posix.return_value = "directory"
+        for uid in (1001, 1000):
+            for owner in (1001, 1000):
+                info = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=owner)
+                path.lstat.return_value = entry.lstat.return_value = info
+                with self.subTest(uid=uid, owner=owner), \
+                        mock.patch.object(capture.os, "getuid", return_value=uid, create=True), \
+                        mock.patch.object(capture, "Path", return_value=path), \
+                        self.owned_input(b"owned bytes", owner):
+                    for check in (lambda: capture.checked_directory(path),
+                                  lambda: capture.read_regular("input", 100),
+                                  lambda: capture.tree_digest(path)):
+                        if uid == owner:
+                            check()
+                        else:
+                            with self.assertRaises(capture.Refused):
+                                check()
+                with self.subTest(output_uid=uid, output_owner=owner), \
+                        mock.patch.object(capture.os, "getuid", return_value=uid, create=True), \
+                        mock.patch.object(capture.os, "open", side_effect=[41, 42]) as opened, \
+                        mock.patch.object(capture.os, "fstat", return_value=info), \
+                        mock.patch.object(capture.os, "close"), \
+                        mock.patch.object(capture.os, "O_DIRECTORY", 0x10000, create=True), \
+                        mock.patch.object(capture.os, "O_NOFOLLOW", 0x20000, create=True), \
+                        mock.patch.object(capture.os, "fdopen") as stream, \
+                        mock.patch.object(capture.os, "fsync"):
+                    if uid == owner:
+                        capture.exclusive_write("output", "receipt.json", b"{}")
+                        stream.return_value.__enter__.return_value.write.assert_called_once_with(b"{}")
+                    else:
+                        with self.assertRaises(capture.Refused):
+                            capture.exclusive_write("output", "receipt.json", b"{}")
+                    self.assertEqual(opened.call_count, 2 if uid == owner else 1)
+            with self.subTest(tree_entry_uid=uid), \
+                    mock.patch.object(capture.os, "getuid", return_value=uid, create=True), \
+                    mock.patch.object(capture, "Path", return_value=path):
+                path.lstat.return_value = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=uid)
+                entry.lstat.return_value = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=0)
+                with self.assertRaises(capture.Refused):
+                    capture.tree_digest(path)
+
+    def test_inner_uid_gate_precedes_output_and_fixture_effects(self):
+        for uid in (0, 1001, 1002):
+            with self.subTest(uid=uid), \
+                    mock.patch.object(capture.os, "getuid", return_value=uid, create=True), \
+                    mock.patch.object(capture.os, "getpid", return_value=1), \
+                    mock.patch.object(capture, "checked_directory") as directory, \
+                    mock.patch.object(capture, "prepare_internal") as prepare, \
+                    mock.patch.object(capture, "write_receipt") as write:
+                with self.assertRaises(capture.Refused):
+                    capture.inside("normal")
+                directory.assert_not_called()
+                prepare.assert_not_called()
+                capture.load_fixture.assert_not_called()
+                write.assert_not_called()
+
+    def test_inner_uid1000_requires_existing_isolation_contract(self):
+        observed = {name: "new" for name in ("pid", "mnt", "user", "net")}
+        creation = {"namespaces": {name: "old" for name in observed}}
+        path = mock.MagicMock()
+        path.resolve.return_value = path
+        path.is_absolute.return_value = True
+        path.lstat.return_value = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=1000)
+        for failure in (None, "pid", "environment", "flags", "namespace", "creation-owner", "output-owner"):
+            with self.subTest(failure=failure), \
+                    mock.patch.object(capture.os, "getuid", return_value=1000, create=True), \
+                    mock.patch.object(capture.os, "getpid", return_value=2 if failure == "pid" else 1), \
+                    mock.patch.dict(capture.os.environ, capture.ENV, clear=True), \
+                    mock.patch.object(capture.sys, "flags", mock.Mock(isolated=failure != "flags", no_user_site=1)), \
+                    mock.patch.object(capture.sys, "dont_write_bytecode", True), \
+                    mock.patch.object(capture, "Path", return_value=path), \
+                    self.owned_input(json.dumps(creation).encode(), 1001 if failure == "creation-owner" else 1000), \
+                    mock.patch.object(capture, "namespaces", return_value=observed), \
+                    mock.patch.object(capture, "verify_inside", wraps=self.verify_inside), \
+                    mock.patch.object(capture, "prepare_internal", side_effect=RuntimeError("stop before fixture")) as prepare, \
+                    mock.patch.object(capture, "write_receipt") as write:
+                path.lstat.return_value.st_uid = 1001 if failure == "output-owner" else 1000
+                if failure == "environment":
+                    capture.os.environ["UNEXPECTED"] = "refuse"
+                observed["pid"] = "old" if failure == "namespace" else "new"
+                if failure == "pid":
+                    with self.assertRaises(capture.Refused):
+                        capture.inside("normal")
+                    write.assert_not_called()
+                else:
+                    self.assertEqual(capture.inside("normal"), 1)
+                    self.assertEqual(write.call_args.args[1]["status"], "failed")
+                self.assertEqual(prepare.call_count, int(failure is None))
+                capture.load_fixture.assert_not_called()
 
     @unittest.skipUnless(os.name == "posix", "Linux exclusive file boundary")
     def test_output_is_exclusive_and_capture_checked_before_copy(self):
@@ -151,6 +294,7 @@ class Capture(unittest.TestCase):
                 finally:
                     events.append("exit")
             with mock.patch.object(capture, "load_fixture", return_value=fixture), \
+                    mock.patch.object(capture.os, "getuid", return_value=1000, create=True), \
                     mock.patch.object(capture, "checked_directory"), \
                     mock.patch.object(capture, "prepare_internal"), \
                     mock.patch.object(capture, "identity", return_value={"pid": 1, "start": "123"}), \
@@ -178,6 +322,7 @@ class Capture(unittest.TestCase):
             srv = mock.Mock(server_port=port, server_address=(address, port))
             fixture = mock.Mock(return_value=contextlib.nullcontext(srv))
             with mock.patch.object(capture, "load_fixture", return_value=fixture), \
+                    mock.patch.object(capture.os, "getuid", return_value=1000, create=True), \
                     mock.patch.object(capture, "checked_directory"), \
                     mock.patch.object(capture, "prepare_internal"), \
                     mock.patch.object(capture.os, "getpid", return_value=1), \
@@ -306,6 +451,7 @@ class Capture(unittest.TestCase):
                 context.__exit__.side_effect = TimeoutError()
             with self.subTest(phase=phase), \
                     mock.patch.object(capture, "load_fixture", return_value=mock.Mock(return_value=context)), \
+                    mock.patch.object(capture.os, "getuid", return_value=1000, create=True), \
                     mock.patch.object(capture, "checked_directory"), \
                     mock.patch.object(capture, "prepare_internal"), \
                     mock.patch.object(capture, "identity", return_value={}), \
@@ -448,7 +594,8 @@ class Capture(unittest.TestCase):
             plan_path = root / "plan.json"
             plan_path.write_text(json.dumps(capture.example_plan()))
             with mock.patch.object(capture, "RUNTIME", runtime), \
-                    mock.patch.object(capture.os, "getuid", return_value=1000):
+                    self.owned_input(plan_path.read_bytes(), 1001), \
+                    mock.patch.object(capture.os, "getuid", return_value=1001):
                 with self.assertRaises(capture.Refused):
                     capture.preflight(str(plan_path), "0" * 64)
             with mock.patch.object(capture, "RUNTIME", runtime):
