@@ -4,7 +4,8 @@ These commands run from the repository root. They do not deploy the relay, insta
 
 ## Relay: real templates, simulated transport
 
-Python's standard library is sufficient; no credentials or third-party packages are needed:
+Use Python 3.12 with `PyNaCl==1.6.0` and `tzdata==2026.5` (the current server imports
+discovery and IANA timezones). No credentials or TikTok/app packages are needed:
 
 ```bat
 python tools\qa_relay.py --port 13301
@@ -45,6 +46,75 @@ curl -X POST http://127.0.0.1:13301/__qa/stop
 ```
 
 Orderly shutdown removes the entire launcher-owned temporary directory. Restart always starts empty. If the process is forcibly killed, remove only its generated `livechatxr-qa-*` directory after verifying its PID is stopped; never remove a supplied or production data directory. The launcher does not print tokens, webhook values or submitted form data.
+
+## Synthetic view-only network fixture
+
+This is a separate opt-in mode of the launcher, not the production server/image:
+
+```bat
+python tools\qa_relay.py --network-fixture --scenario normal --port 0
+python -m unittest discover -s tests -p test_qa_network_fixture.py -v
+```
+
+`normal`, `delayed` and `closed-dm` are the only startup scenarios; restart with a
+different option to change them. No runtime fault, reset or stop endpoints exist.
+The console prints synthetic manage/admin paths, not real identity credentials.
+Every HTML response labels itself SYNTHETIC VIEW-ONLY. The seeded streamer and
+linked, reviewed channel association are fabricated presentation data, not
+onboarding, channel-control, founder-review or Discord-delivery proof.
+
+Only GET `/`, `/privacy`, `/terms`, `/pretext.js`, the internally seeded manage
+path, and `/admin?key=synthetic-view-only` reach production dispatch. No other
+query variants are accepted. All non-GET methods are rejected before dispatch,
+including HEAD/OPTIONS and unknown verbs. All other routes return 404, including
+register/recover/Watch redirects, both OAuth callbacks, Discord interactions,
+Stripe, network actions and the relay fixture's reset/stop routes. Forms become
+disabled fieldsets; links outside the exact read allowlist lose their href.
+Scripts, external fonts/preconnect and refresh metadata are removed. CSP denies
+scripts, form actions, network resources, framing and base overrides. The font
+fallback is intentional for offline use; production styling/templates are unchanged.
+
+Network uses literal empty config, initialized disposable SQLite, a fixture-local
+fake `_discord`, and its own loop. It never calls `Network.start`, collectors,
+OAuth exchange, `Web.connect` or production main. Disabled discovery/missing-config
+notices on admin are expected, not a request to supply credentials. `delayed`
+adds synthetic Twitch staleness; `closed-dm` adds one closed-DM listing. Fake
+transport output stays in-process and is not delivery evidence. Billing, donation,
+OAuth, Google and analytics config are blanked; no environment credentials are
+passed into Network. Both urllib urlopen and opener dispatch fail closed.
+
+Exit only through context exit / Ctrl+C: shutdown and join the owned listener,
+stop owned Network tasks, drain async work, close its loop/SQLite connections,
+restore patched adapters/state, then remove only the owned temporary directory.
+Do not embed this process-global patch harness alongside a production server or
+run concurrent fixtures in one Python process. The safety regression exercises
+all scenarios, initialized listing rendering, denied routes/verbs, urllib egress,
+unchanged listing state, normal/exception cleanup and restoration.
+
+### QA artifact, dependencies and bind/isolation contract
+
+`tools/qa-network-manifest.json` is the deliberate source-package allowlist and
+dependency contract. Package only its `files` from the exact reviewed commit into
+a distinct `LiveChatXR-Network-ViewOnly-<commit>.zip`, preserving relative paths;
+include a generated receipt with that commit and each file's SHA256. Do not use
+the normal portable app, installer, production Dockerfile/image, production state
+volume, credentials or user profiles. The QA archive includes its launcher,
+server imports, pretext, chat module, safety test, manifest and this runbook.
+Install only the manifest's pinned direct dependencies into a dedicated Python
+3.12 environment before running the packaged safety command above. PyNaCl's
+normal transitive CFFI dependencies are installed by pip; the receipt records
+resolved versions. Dependency installation is not fixture/provider traffic.
+
+The sole bind remains IPv4 `127.0.0.1`, including `--port 0`; there is no bind
+override. Container-loopback does NOT support ordinary host port publishing.
+No container package/runtime or Dora provisioning is delivered or authorized.
+Any later container choice needs a reviewed fixture-only bind interface (default
+loopback), explicit no-egress network isolation and host `127.0.0.1` publication;
+never infer those guarantees from this source package. Dora's later receipt must
+include the reviewed commit/artifact, safety result, manifest/receipt and approved
+runtime isolation mapping. Dev-lead contract review plus canonical review/merge
+remain outstanding until the respective lanes act; source tests do not accept F,
+change E/F1/G or establish phone/Quest/operator custody.
 
 ## Private Discord transport consumer (Q only)
 
