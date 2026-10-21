@@ -1652,7 +1652,8 @@ class Handler(BaseHTTPRequestHandler):
         # A timed-out or malformed request is logged before parse_request sets path/command.
         path, command = getattr(self, "path", "-"), getattr(self, "command", None) or "-"
         if path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
-        log.info("%s %s", command, re.sub(r"/m/[\w-]+", "/m/…", path.split("?")[0]))
+        path = re.sub(r"/m/[\w-]+", "/m/…", path.split("?")[0]).replace("\r", "").replace("\n", "").replace("\t", " ")
+        log.info("%s %s", command, path)  # relay.log is tab/line-separated; the request line is client input
 
 
 def main() -> None:
