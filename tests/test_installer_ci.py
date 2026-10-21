@@ -22,20 +22,12 @@ class InstallerCompiler(unittest.TestCase):
             ("6.6.1.0", "6.7.1.0", 0, True),
             ("6.8.0.0", "6.7.1.0", 0, True),
             ("6.7.1.0", "6.7.1.0", 0, True),
-            ("6.6.1.0", "6.6.1.0", 0, False),
             ("missing", "6.7.1.0", 1, False),
         ):
             with self.subTest(existing=existing, installed=installed, exit_code=exit_code):
                 script = """
 $ErrorActionPreference = 'Stop'
 $global:compilerVersion = '%s'
-function Test-Path { $global:compilerVersion -ne 'missing' }
-function Get-Item {
-    if ($global:compilerVersion -eq 'missing') { throw 'Compiler missing' }
-    [pscustomobject]@{ VersionInfo = [pscustomobject]@{
-        FileVersionRaw = [version]$global:compilerVersion
-    } }
-}
 function choco {
     if ($args -notcontains '--version' -or $args -notcontains '6.7.1' -or
         $args -notcontains '--force' -or $args -notcontains '--allow-downgrade') {
@@ -57,3 +49,7 @@ Write-Output "COMPILER=$global:compilerVersion"
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stdout)
                     self.assertNotIn("COMPILER=", result.stdout)
+
+    def test_installer_rejects_other_compiler_versions(self):
+        installer = (ROOT / "installer/livechat-xr.iss").read_text()
+        self.assertIn("#if Ver != 0x06070100\n  #error Expected Inno Setup 6.7.1\n#endif", installer)

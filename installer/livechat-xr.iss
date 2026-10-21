@@ -1,5 +1,8 @@
 ; LiveChat XR installer (Inno Setup 6). Build: iscc /DAppVersion=x.y.z installer\livechat-xr.iss
 ; Expects dist\LiveChatXR\ (PyInstaller) and layer\livechat_xr_layer.dll to exist.
+#if Ver != 0x06070100
+  #error Expected Inno Setup 6.7.1
+#endif
 #ifndef AppVersion
   #define AppVersion "0.0.0-dev"
 #endif

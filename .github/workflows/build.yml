@@ -81,11 +81,8 @@ jobs:
           if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$') { throw 'Invalid version tag' }
           $v = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME.Substring(1) } else { "0.0.0-dev.${{ github.run_number }}" }
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if (!(Test-Path $iscc) -or (Get-Item $iscc).VersionInfo.FileVersionRaw -ne [version]'6.7.1.0') {
-            choco install innosetup --version 6.7.1 --allow-downgrade --force --no-progress -y | Out-Null
-            if ($LASTEXITCODE) { throw 'Inno Setup install failed' }
-          }
-          if ((Get-Item $iscc).VersionInfo.FileVersionRaw -ne [version]'6.7.1.0') { throw 'Expected Inno Setup 6.7.1' }
+          choco install innosetup --version 6.7.1 --allow-downgrade --force --no-progress -y | Out-Null
+          if ($LASTEXITCODE) { throw 'Inno Setup install failed' }
           & $iscc /DAppVersion=$v installer\livechat-xr.iss
           if ($LASTEXITCODE) { throw "ISCC failed" }
           $files = @(Get-ChildItem dist/LiveChatXR-Setup-*.exe)
