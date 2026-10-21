@@ -196,7 +196,7 @@ def fixture(port=0, *, network_fixture=False, scenario="normal"):
     with tempfile.TemporaryDirectory(prefix="livechatxr-qa-") as data, contextlib.ExitStack() as stack:
         values = dict(DATA=Path(data), FREE_SLOTS=1, MAX_REGS=2, PAY_MONTHLY="/qa-payment/monthly",
                       PAY_YEARLY="/qa-payment/yearly", BILLING_URL="/qa-payment/billing", PUBLIC_URL="",
-                      STRIPE_SECRET="", DISCORD_ID="", DISCORD_SECRET="", GOOGLE_ID="", GA_ID="", ADMIN_KEY="",
+                      STRIPE_SECRET="", DISCORD_ID="", DISCORD_SECRET="", GA_ID="", ADMIN_KEY="",
                       regs={}, founders=set(), status={}, stats={}, tasks={}, oauth={}, check_channel=check_channel,
                       check_webhook=check_webhook, start=start, stop=lambda token: server.status.pop(token, None))
         for key, value in values.items():

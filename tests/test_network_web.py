@@ -68,10 +68,11 @@ class Web(unittest.TestCase):
         self.thread.join()
         self.loop.close()
 
-    def request(self, path, form=None, origin=True):
+    def request(self, path, form=None, origin=True, cookie=""):
+        headers = {"Origin": self.base if origin is True else origin} if origin else {}
+        if cookie: headers["Cookie"] = cookie
         req = urllib.request.Request(self.base + path,
-            None if form is None else urllib.parse.urlencode(form).encode(),
-            {"Origin": self.base if origin is True else origin} if origin else {})
+            None if form is None else urllib.parse.urlencode(form).encode(), headers)
         try: response = self.open(req, timeout=4)
         except urllib.error.HTTPError as error: response = error
         with response: return response.status, response.headers, response.read().decode()
@@ -94,8 +95,11 @@ class Web(unittest.TestCase):
         self.assertEqual(query["scope"], ["identify"])
         self.assertEqual(query["redirect_uri"], [self.base + "/network/discord/callback"])
         state = query["state"][0]
+        cookie = result[1]["Set-Cookie"]
+        self.assertEqual(cookie, f"lcx_oauth={state}; Max-Age=900; Path=/network/discord/callback; SameSite=Lax; HttpOnly; Secure")
         with mock.patch.object(server, "discord_identify", return_value=owner):
-            result = self.request("/network/discord/callback?" + urllib.parse.urlencode(dict(state=state, code="fixture")))
+            result = self.request("/network/discord/callback?" + urllib.parse.urlencode(dict(state=state, code="fixture")),
+                                  cookie=cookie.split(";")[0])
         return result, state
 
     def signed(self, name, owner="7", **fields):
@@ -125,6 +129,14 @@ class Web(unittest.TestCase):
         for origin, value in ((False, csrf), ("https://evil.test", csrf), (True, "wrong")):
             self.assertEqual(self.request(f"/m/{self.token}/network", dict(action="consent", csrf=value), origin)[0], 403)
         self.assertEqual(self.request(f"/m/{self.token}/network?action=optout")[0], 404)
+        # L1: a state that comes back without the starting browser's cookie is refused and consumed.
+        self.post("consent", listed="yes")
+        state = urllib.parse.parse_qs(urllib.parse.urlsplit(self.post("link")[1]["Location"]).query)["state"][0]
+        with mock.patch.object(server, "discord_identify") as exchange:
+            for cookie in ("", "lcx_oauth=someone-else"):
+                self.assertEqual(self.request(f"/network/discord/callback?state={state}&code=fixture", cookie=cookie)[0], 400)
+            exchange.assert_not_called()
+        self.assertNotIn(state, server.network_oauth)
         result, state = self.connect()
         self.assertEqual(result[0], 303)
         with mock.patch.object(server, "discord_identify") as exchange:
@@ -238,6 +250,7 @@ class Web(unittest.TestCase):
         self.post("consent", listed="yes")
         result = self.post("link")
         state = urllib.parse.parse_qs(urllib.parse.urlsplit(result[1]["Location"]).query)["state"][0]
+        cookie = result[1]["Set-Cookie"].split(";")[0]
         entered, release = threading.Event(), threading.Event()
         def exchange(code):
             entered.set()
@@ -246,7 +259,7 @@ class Web(unittest.TestCase):
         results = []
         with mock.patch.object(server, "discord_identify", exchange):
             callback = threading.Thread(target=lambda: results.append(self.request(
-                f"/network/discord/callback?state={state}&code=fixture")))
+                f"/network/discord/callback?state={state}&code=fixture", cookie=cookie)))
             callback.start()
             try:
                 self.assertTrue(entered.wait(2))

@@ -35,7 +35,7 @@ class Account(unittest.TestCase):
         try:
             home = urllib.request.urlopen(self.base + "/").read().decode()
             self.assertIn("No Discord server yet?", home)
-            self.assertLess(home.index("No Discord server yet?"), home.index('value="discord"'))  # read before the button
+            self.assertLess(home.index("No Discord server yet?"), home.index(server.DISCORD_BUTTON))  # read before the button
         finally:
             server.DISCORD_ID, server.PUBLIC_URL = "", ""
         self.assertNotIn("No Discord server yet?", urllib.request.urlopen(self.base + "/").read().decode())
@@ -57,7 +57,7 @@ class Account(unittest.TestCase):
         (token, r), = server.regs.items()
         self.assertEqual((r["webhook"], r["channel_id"], r["plan"], r["created"]), (hooks[1], "c1", first["plan"], first["created"]))
         self.assertIn("&moved=1", headers["Location"])
-        self.assertTrue(any(url == hooks[0] and "moved to another channel" in text for url, text in posts))
+        self.assertTrue(any(url == hooks[0] and "moved to another Discord channel" in text for url, text in posts))
         self.assertFalse(any("moved" in text and token in text for _, text in posts), "the moved notice never carries the private link")
         page = urllib.request.urlopen(self.base + headers["Location"]).read().decode()
         self.assertIn("nothing is duplicated", page)
@@ -149,27 +149,23 @@ class Account(unittest.TestCase):
             self.assertEqual(self.post(f"/m/{token}/save", name="Ann", email="ann@example.com", twitch="someone")[0], 303)
         check.assert_called_once_with(HOOK)
 
-    def test_recovery_requires_verified_identity_and_handles_duplicate_email(self):
-        token = self.register()
-        with mock.patch.object(server, "GOOGLE_ID", "configured"), \
-                mock.patch.object(server, "google_identity", side_effect=ValueError):
-            a = self.post("/recover", google="forged", email="ann@example.com")
-            b = self.post("/recover", google="forged", email="absent@example.com")
-            self.assertEqual((a[0], a[2]), (b[0], b[2]))
-            self.assertNotIn(token, a[2])
-        with mock.patch.object(server, "GOOGLE_ID", "configured"), \
-                mock.patch.object(server, "google_identity", return_value=("Ann", "ann@example.com")):
-            code, headers, _ = self.post("/recover", google="verified")
-            self.assertEqual((code, headers["Location"]), (303, f"/m/{token}"))
-            other = "otherregistrationtoken123"
-            server.regs[other] = dict(server.regs[token])
-            code, _, body = self.post("/recover", google="verified")
-            self.assertEqual(code, 200)
-            self.assertIn(f"/m/{token}", body)
-            self.assertIn(f"/m/{other}", body)
-        with mock.patch.object(server, "GOOGLE_ID", ""), mock.patch.object(server, "google_identity") as verify:
-            self.assertEqual(self.post("/recover", google="verified")[0], 400)
-            verify.assert_not_called()
+    def test_relay_from_before_discord_sign_in_links_on_discord_sign_up(self):
+        # Migration: a typed/Google-era relay is linked when its owner signs up with Discord for the same stream in the
+        # same server; another Discord account can't take it over afterwards.
+        old_hook, new_hook = HOOK, HOOK[:-1] + "b"
+        info = {old_hook: {"name": "D", "guild_id": "g1", "channel_id": "c0"}, new_hook: {"name": "D", "guild_id": "g1", "channel_id": "c1"}}
+        with mock.patch.object(server, "check_webhook", side_effect=lambda url: info[url]):
+            token = self.register()
+            with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+                owner = {"id": "42", "username": "ann", "verified": False, "email": "other@example.com"}
+                code, headers, _, _ = fixture.Server.discord(self, owner, hook=new_hook, twitch="Someone")
+                self.assertEqual((code, headers["Location"]), (303, f"/m/{token}?new=discord&moved=1"))
+                (same, r), = server.regs.items()
+                self.assertEqual((same, r["discord_id"], r["email"], r["webhook"]), (token, "42", "ann@example.com", new_hook))
+                stranger = {"id": "9", "username": "x", "verified": True, "email": "x@example.com"}
+                code, _, body, _ = fixture.Server.discord(self, stranger, hook=old_hook, twitch="someone")
+        self.assertEqual((code, len(server.regs), server.regs[token]["discord_id"]), (409, 1, "42"))
+        self.assertIn("from another Discord account", body)
 
     def test_diagnostic_allowlist_never_copies_private_error_text(self):
         token = self.register()

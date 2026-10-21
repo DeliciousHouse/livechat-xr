@@ -78,19 +78,18 @@ Environment is read at import/startup. Restart after configuration changes. No s
 | PORT | `13300` | HTTP port; server binds all interfaces |
 | MAX_REGS | `50` | Hard ceiling including founder, free and paid registrations |
 | FREE_SLOTS | `5` | Lifetime founder slots; later users get one channel free |
-| PUBLIC_URL | empty | Public origin for manage links and Discord callback; trailing slash stripped. Required for Connect Discord: without it the button is hidden and an error is logged at startup. Keep it in the Dora env file, since the deploy controller passes only `--env-file` |
+| PUBLIC_URL | empty | Public origin for manage links and Discord callback; trailing slash stripped. Required for Discord sign-up and log-in: without it the page falls back to the typed name/email and pasted-webhook form, and an error is logged at startup. Keep it in the Dora env file, since the deploy controller passes only `--env-file` |
 | DONATE_URL | empty | Set = free for everyone (all channels) and the pages ask for donations at this URL |
 | PAY_MONTHLY | empty | Monthly Stripe Payment Link |
 | PAY_YEARLY | empty | Yearly Stripe Payment Link |
 | BILLING_URL | empty | Stripe customer-portal login URL |
 | STRIPE_WEBHOOK_SECRET | empty | Signing secret; empty rejects Stripe events |
-| DISCORD_CLIENT_ID | empty | Enables Connect Discord when set |
+| DISCORD_CLIENT_ID | empty | With `PUBLIC_URL`, makes sign-up **Log in or sign up with Discord** (scopes `identify email webhook.incoming`; log-in uses `identify`). Redirect URI: `{PUBLIC_URL}/discord/callback` |
 | DISCORD_CLIENT_SECRET | empty | Discord OAuth exchange secret |
-| GOOGLE_CLIENT_ID | empty | Enables Google identity prefill/verification and verified-email relay recovery |
 | TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET | empty | Helix app credentials for permanent user ID → current login; missing credentials retain anonymous IRC and one-time missing-handle alerts |
 | GA_ID | empty | Enables GA4 on public home/privacy/manage pages |
 
-With `DONATE_URL` set, everyone runs all channels free and pages show a donate link. Without it: first 5 streamers everything free, then 1 channel free and multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. Google is optional identity verification, not a stored account or an email-login system. Manual email input sends no verification email.
+With `DONATE_URL` set, everyone runs all channels free and pages show a donate link. Without it: first 5 streamers everything free, then 1 channel free and multiple channels on a paid plan. Empty payment links hide the corresponding upgrade choices; the first channel still runs. Configure billing before advertising paid service. With Discord OAuth on, each registration stores the Discord user ID, username, display name and verified email (if Discord shares one); one Discord account can own up to 3 relays (`REGS_PER_DISCORD_USER`, a code constant), and `MAX_REGS` stays the global ceiling. Without it, typed email is a contact field and no verification email is sent. `GOOGLE_CLIENT_ID` is no longer read; an old value in an env file is ignored.
 
 ## Relay HTTP interface
 
@@ -99,12 +98,12 @@ Responses are HTML except simple health/Stripe text responses; there is no gener
 | Method / path | Inputs and result |
 |---|---|
 | GET `/` | Signup form |
-| POST `/register` | URL-encoded name, email, webhook, and `tiktok` and/or `twitch` (the older `platform` + `channel` pair is still accepted); optional `google` credential and `via=discord` or `via=webhook`. 303 to manage on success; 400 validation error; 503 new-registration capacity reached |
-| GET `/discord/callback` | One-use state and code, valid for 900 seconds; exchanges Discord authorization for the selected channel's webhook; 400 on failure |
+| POST `/register` | URL-encoded `tiktok`, `twitch` and/or `youtube` (the older `platform` + `channel` pair is still accepted). With Discord OAuth on: channels are validated, then 303 to Discord with scopes `identify email webhook.incoming`; no channels = log in (scope `identify`). Without it: also name, email and webhook, then 303 to manage. 400 validation error |
+| GET `/discord/callback` | One-use `state` and `code`, valid for 900 seconds and bound to the starting browser by the `lcx_oauth` cookie (`SameSite=Lax; HttpOnly; Secure; Path=/discord/callback`). Sign-up: creates the relay, or updates the caller's relay for the same stream, or links a pre-Discord relay for the same stream in the same Discord server; 303 to manage. Log-in: 303 to the linked relay's manage page, a list when there are several, or the home page when there is none. 400 expired/cancelled/other-browser/exchange failure; 409 relay cap reached or the stream is linked to another Discord account in that server; 503 capacity reached |
 | GET `/m/{token}` | Private manage page; 404 absent/deleted registration |
 | POST `/m/{token}/save` | Same validation as registration, blank webhook retains current credential; replaces settings while preserving private token, plan, founder reservation, subscription and creation date; restarts relay and confirms to the new webhook |
 | POST `/m/{token}/report` | Writes sanitized channel/status diagnostics to bounded `support.jsonl`; one report per account per minute; never credentials, tokens, email or chat |
-| GET/POST `/recover` | Google sign-in page / verifies Google credential and redirects to a matching account or offers matching channel lists; unverified visitors never learn whether an email exists |
+| GET/POST `/recover` | **Log in** page / 303 to Discord with scope `identify` (no webhook is created), finishing at `/discord/callback`; 400 when Discord OAuth is not configured |
 | POST `/m/{token}/test` | Posts a test for any plan; 404 inactive link. “Test sent” is not a delivery receipt |
 | POST `/m/{token}/delete` | Deletes registration and in-memory stats, stops runner. Does not cancel Stripe billing |
 | GET `/privacy` | Stored data, analytics and deletion policy |
