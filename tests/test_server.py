@@ -528,6 +528,35 @@ class Server(unittest.TestCase):
             self.assertTrue(all(f"/m/{t}" in body for t in server.regs))
             self.assertEqual(self.discord(dict(self.ANN, id="43"), hook=HOOK[:-1] + "y", twitch="another")[0], 303)
 
+    def test_discord_cap_applies_when_linking_a_legacy_relay(self):
+        with mock.patch.object(server, "check_webhook", return_value={"name": "D", "guild_id": "guild-fixture"}):
+            self.assertEqual(self.post("/register", name="Legacy", email="old@example.com",
+                                       twitch="legacy", webhook=HOOK)[0], 303)
+            legacy = next(iter(server.regs))
+            with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+                for i in range(server.REGS_PER_DISCORD_USER):
+                    self.assertEqual(self.discord(self.ANN, hook=HOOK[:-1] + str(i), twitch=f"stream{i}")[0], 303)
+                before = json.loads(json.dumps(server.regs))
+                saved = (server.DATA / "registrations.json").read_bytes()
+                posts, started = list(self.posts), list(self.started)
+                # Both an exact-webhook match and a same-guild/stream match add ownership.
+                for hook in (HOOK, HOOK[:-1] + "x"):
+                    code, _, body, _ = self.discord(self.ANN, hook=hook, twitch="legacy")
+                    self.assertEqual(code, 409)
+                    self.assertIn("already has 3 relays", body)
+                    self.assertEqual(server.regs, before)
+                    self.assertEqual((server.DATA / "registrations.json").read_bytes(), saved)
+                    self.assertEqual((self.posts, self.started), (posts, started))
+                owned = next(t for t in server.regs if t != legacy)
+                self.assertEqual(self.post(f"/m/{owned}/delete")[0], 200)
+                self.assertEqual(self.discord(self.ANN, hook=HOOK[:-1] + "x", twitch="legacy")[0], 303)
+                self.assertEqual(server.regs[legacy]["discord_id"], self.ANN["id"])
+                self.assertEqual(sum(r.get("discord_id") == self.ANN["id"] for r in server.regs.values()),
+                                 server.REGS_PER_DISCORD_USER)
+                # Moving an already-owned relay and saving settings remain allowed at the cap.
+                self.assertEqual(self.discord(self.ANN, hook=HOOK[:-1] + "y", twitch="legacy")[0], 303)
+                self.assertEqual(self.post(f"/m/{legacy}/save", name="Ann", email="", twitch="legacy")[0], 303)
+
     def test_discord_state_is_bound_to_the_starting_browser(self):
         with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
             for cookie in ("", "lcx_oauth=someone-elses-state"):

@@ -1652,7 +1652,7 @@ class Handler(BaseHTTPRequestHandler):
                 if owner and did and regs[owner].get("discord_id", did) != did:
                     return fail("This stream already posts into this Discord server from another Discord account. "
                                 "Ask them to remove it, or pick a channel in a different server.", 409)
-            if not edit_token and not owner and len(mine) >= REGS_PER_DISCORD_USER:
+            if not edit_token and owner not in mine and len(mine) >= REGS_PER_DISCORD_USER:
                 return fail(f"This Discord account already has {REGS_PER_DISCORD_USER} relays. Log in and edit one of them, "
                             "or delete one first.", 409)
             if not edit_token and owner and regs[owner]["webhook"] != webhook:
