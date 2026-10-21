@@ -60,6 +60,11 @@ static void Log(const char* fmt, ...) {
     fclose(f);
 }
 
+// config.ini values: out-of-range or non-finite (inf/nan parse via _wtof) keep the default instead of a broken quad.
+static float Clamp(float v, float lo, float hi, float fallback) {
+    return std::isfinite(v) ? (v < lo ? lo : v > hi ? hi : v) : fallback;
+}
+
 static void Disable(const char* why) {
     if (!g_disabled.exchange(true)) Log("DISABLED: %s", why);
 }
@@ -194,7 +199,7 @@ static void RasterizeViewers(const std::wstring& text, std::vector<uint32_t>& ou
         std::wstring line = text.substr(start, end - start);
         start = end + 1;
         size_t sp = line.find(L' ');
-        if (sp == std::wstring::npos) continue;
+        if (sp == std::wstring::npos || items.size() >= 8) continue;  // three platforms; never an unbounded list
         std::wstring count = line.substr(sp + 1);
         while (!count.empty() && (count.back() == L'\r' || count.back() == L' ')) count.pop_back();
         items.push_back({line.substr(0, sp), count});
@@ -261,25 +266,31 @@ static void RasterizeViewers(const std::wstring& text, std::vector<uint32_t>& ou
     DeleteDC(dc);
 }
 
+// banner.txt / viewers.txt are a few hundred bytes; anything bigger is cut, never read whole into a game process.
+static const size_t MAX_FILE = 64 * 1024;
+static bool ReadCapped(const std::wstring& path, std::string& out) {
+    FILE* f = _wfopen(path.c_str(), L"rb");
+    if (!f) return false;
+    out.resize(MAX_FILE);
+    out.resize(fread(&out[0], 1, MAX_FILE, f));
+    fclose(f);
+    return true;
+}
+
 // Watches one file; each new write is rasterized and shown for showMs after its write time. Empty file = hide.
 static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs,
                     void (*raster)(const std::wstring&, std::vector<uint32_t>&)) {
     std::wstring path = g_dir + L"\\" + name;
     FILETIME last{};
     std::vector<uint32_t> px(pane->w * pane->h);
-    for (;;) {
+    for (;;) try {
         Sleep(200);
         WIN32_FILE_ATTRIBUTE_DATA fa;
         if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) continue;
         if (CompareFileTime(&fa.ftLastWriteTime, &last) == 0) continue;
         last = fa.ftLastWriteTime;
-        FILE* f = _wfopen(path.c_str(), L"rb");
-        if (!f) continue;
         std::string u8;
-        char buf[4096];
-        size_t n;
-        while ((n = fread(buf, 1, sizeof buf, f)) > 0) u8.append(buf, n);
-        fclose(f);
+        if (!ReadCapped(path, u8)) continue;
         if (u8.empty()) {
             std::lock_guard<std::mutex> l(g_mx);
             pane->until = 0;
@@ -298,6 +309,8 @@ static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs,
         pane->pixels.swap(px);
         pane->dirty = true;
         pane->until = GetTickCount64() + (showMs - ageMs);
+    } catch (...) {
+        Log("watcher error; skipped one update");  // an escaped exception would std::terminate the game
     }
 }
 
@@ -418,7 +431,7 @@ static bool Setup(XrSession session, XrSystemId sys, ID3D11Device* dev) {
 static bool Upload(Pane& P) {  // render thread only
     uint32_t idx;
     XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    if (XR_FAILED(n_xrAcquireSwapchainImage(P.sc, &ai, &idx))) return false;
+    if (XR_FAILED(n_xrAcquireSwapchainImage(P.sc, &ai, &idx)) || idx >= P.imgs.size()) return false;
     XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, 100000000};  // 100 ms
     if (XR_FAILED(n_xrWaitSwapchainImage(P.sc, &wi))) return false;
     ID3D11DeviceContext* ctx = nullptr;
@@ -627,16 +640,21 @@ extern "C" __declspec(dllexport) XrResult XRAPI_CALL xrNegotiateLoaderApiLayerIn
         WIN32_FILE_ATTRIBUTE_DATA fa;  // keep the log small
         if (GetFileAttributesExW((g_dir + L"\\overlay.log").c_str(), GetFileExInfoStandard, &fa) && fa.nFileSizeLow > (1u << 20))
             DeleteFileW((g_dir + L"\\overlay.log").c_str());
-        wchar_t v[32];
-        if (GetPrivateProfileStringW(L"banner", L"up", L"", v, 32, ini.c_str())) g_up = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"banner", L"distance", L"", v, 32, ini.c_str())) g_dist = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"banner", L"width", L"", v, 32, ini.c_str())) g_width = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"banner", L"seconds", L"", v, 32, ini.c_str()) && _wtof(v) > 0) g_showMs = (ULONGLONG)(_wtof(v) * 1000);
-        if (GetPrivateProfileStringW(L"banner", L"follow", L"", v, 32, ini.c_str()) && _wtof(v) >= 0) g_followDeg = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"viewers", L"up", L"", v, 32, ini.c_str())) g_vUp = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"viewers", L"right", L"", v, 32, ini.c_str())) g_vRight = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"viewers", L"distance", L"", v, 32, ini.c_str())) g_vDist = (float)_wtof(v);
-        if (GetPrivateProfileStringW(L"viewers", L"width", L"", v, 32, ini.c_str())) g_vWidth = (float)_wtof(v);
+        auto cfg = [&](const wchar_t* sec, const wchar_t* key, float& out, float lo, float hi) {
+            wchar_t v[32];
+            if (GetPrivateProfileStringW(sec, key, L"", v, 32, ini.c_str())) out = Clamp((float)_wtof(v), lo, hi, out);
+        };
+        float seconds = g_showMs / 1000.f;
+        cfg(L"banner", L"up", g_up, -5, 5);
+        cfg(L"banner", L"distance", g_dist, 0.1f, 10);
+        cfg(L"banner", L"width", g_width, 0.05f, 5);
+        cfg(L"banner", L"seconds", seconds, 0.5f, 600);
+        cfg(L"banner", L"follow", g_followDeg, 0, 180);
+        cfg(L"viewers", L"up", g_vUp, -5, 5);
+        cfg(L"viewers", L"right", g_vRight, -5, 5);
+        cfg(L"viewers", L"distance", g_vDist, 0.1f, 10);
+        cfg(L"viewers", L"width", g_vWidth, 0.05f, 5);
+        g_showMs = (ULONGLONG)(seconds * 1000);
         Log("negotiated in %ls (up %.2f, distance %.2f, width %.2f, %llu ms, follow %.0f deg; viewers up %.2f right %.2f width %.2f)",
             base, g_up, g_dist, g_width, g_showMs, g_followDeg, g_vUp, g_vRight, g_vWidth);
         g_active = true;

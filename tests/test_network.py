@@ -454,7 +454,8 @@ class Packaging(unittest.TestCase):
     def test_docker_copy_layout_import_and_network_version(self):
         root = Path(__file__).resolve().parents[1]
         docker = (root / "server/Dockerfile").read_text()
-        self.assertIn("PyNaCl==1.6.0", docker)
+        self.assertIn("PyNaCl==1.6.2", (root / "server/requirements.txt").read_text())
+        self.assertIn("pip install --no-cache-dir -r /tmp/requirements.txt", docker)
         copies = next(line.split()[1:-1] for line in docker.splitlines() if line.startswith("COPY "))
         with tempfile.TemporaryDirectory() as tmp:
             for source in copies: shutil.copy2(root / source, tmp)

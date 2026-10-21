@@ -91,6 +91,7 @@ def post_discord(webhook: str, text: str, *, on_error=None, on_retry=None) -> bo
         "content": text[:2000],
         "username": "LiveChat XR",
         "allowed_mentions": {"parse": []},  # chat text must never ping @everyone/@here/roles
+        "flags": 4,  # SUPPRESS_EMBEDS: links typed by viewers never unfold into previews or images
     }).encode()
     req = urllib.request.Request(webhook, body, {"Content-Type": "application/json",
                                                 "User-Agent": "LiveChatXR (github.com/DeliciousHouse/livechat-xr)"})
@@ -812,6 +813,8 @@ async def relay(platform: str, channel: str, on_batch, status, seconds: float = 
         if on_identity:
             kwargs.update(identity=(identities or {}).get(p, {}).copy(), on_identity=lambda found: on_identity(p, found))
         def emit(line):
+            # One chat message is one line: an embedded newline must not forge extra banner lines or a gold gift line.
+            line = " ".join(line.splitlines())
             queue.append(ICONS[p] + line if platform_icons and p in ICONS and not line.startswith(ASK) else line)
             queued_platforms.add(p)
         if p == "tiktok":

@@ -151,7 +151,7 @@ PC logs: tray **Open data folder**, then `app.log` and `overlay.log`. For suppor
 
 **Can I cancel?** Yes, through Stripe's billing portal. Deleting the relay connection alone does not cancel payment.
 
-**Can viewers ping my server?** LiveChat XR disables Discord mentions in its posts. Keep the webhook itself private because someone using it directly is outside LiveChat XR's controls.
+**Can viewers ping my server?** LiveChat XR disables Discord mentions in its posts and suppresses link previews, so a link typed in chat never unfolds into a preview card or image. Keep the webhook itself private because someone using it directly is outside LiveChat XR's controls.
 
 **Does it store my chat?** The hosted relay passes it to Discord and keeps delivery counters, not a chat archive. Discord retains messages under its policies; the PC app keeps the latest banner file.
 

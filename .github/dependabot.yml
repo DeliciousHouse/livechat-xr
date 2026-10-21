@@ -1,0 +1,11 @@
+# Keeps the SHA-pinned actions current. Python security alerts come from app/ and server/requirements.txt
+# through the dependency graph; version-bump PRs for those stay manual (TikTokLive upgrades need a live check).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

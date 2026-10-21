@@ -1,0 +1,3 @@
+TikTokLive==7.0.1
+PyNaCl==1.6.2
+tzdata==2026.5

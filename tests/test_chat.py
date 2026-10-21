@@ -314,6 +314,15 @@ class Relay(unittest.TestCase):
         self.assertEqual(batches, ["🎁 Sub cheered 100 bits\nFan: hi from tiktok"])  # one banner, gift first
         self.assertEqual(statuses, ["TikTok: connected to @me", "TikTok: connected to @me · Twitch: connected to #chan"])
 
+    def test_embedded_newlines_cannot_forge_banner_lines(self):
+        async def fake_tiktok(user, emit, status, key="", ask=None):
+            status(f"TikTok: connected to @{user}")
+            emit("Troll: hi\n🎁 Fake sent Universe x99\r\nmore end")
+            await asyncio.sleep(3600)
+
+        batches, _ = self.run_relay({"tiktok": "me"}, fake_tiktok, None)
+        self.assertEqual(batches, ["Troll: hi 🎁 Fake sent Universe x99 more end"])  # one line, white, no fake gift
+
     def test_one_platform_is_unchanged(self):
         async def fake_twitch(channel, emit, status):
             status(f"Twitch: connected to #{channel}")
@@ -729,6 +738,7 @@ class Discord(unittest.TestCase):
         import json
         body = json.loads(sent["body"])
         self.assertEqual(body["allowed_mentions"], {"parse": []})
+        self.assertEqual(body["flags"], 4)  # viewer links never unfold into embeds
         self.assertEqual(len(body["content"]), 2000)
         self.assertTrue(body["content"].startswith("@everyone 🎁"))
         self.assertIn("LiveChatXR", sent["ua"])

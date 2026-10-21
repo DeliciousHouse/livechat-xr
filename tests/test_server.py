@@ -583,6 +583,48 @@ class Server(unittest.TestCase):
         self.assertIn(b"as prepare", r.read())
         self.assertNotIn("pretext", urllib.request.urlopen(self.base + "/privacy").read().decode())  # only the home page loads it
 
+    def test_security_headers_on_every_response_path(self):
+        for path in ("/", "/health", "/nope", "/go/" + "a" * 22, "/m/" + "x" * 30):
+            try:
+                headers = self.open(self.base + path).headers
+            except urllib.error.HTTPError as e:
+                headers = e.headers
+            with self.subTest(path=path):
+                self.assertEqual(headers["Server"], "LiveChatXR")  # no Python version banner
+                self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+                self.assertIn("form-action 'self' https://discord.com", headers["Content-Security-Policy"])
+                for name, value in server.SECURITY_HEADERS.items():
+                    self.assertEqual(headers.get_all(name), [value])
+
+    def test_cross_site_form_posts_are_rejected(self):
+        form = urllib.parse.urlencode(dict(name="A", email="a@example.com", tiktok="a1", webhook=HOOK)).encode()
+        request = urllib.request.Request(self.base + "/register", form, {"Sec-Fetch-Site": "cross-site"})
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            self.open(request)
+        self.assertEqual((rejected.exception.code, server.regs), (403, {}))
+        request = urllib.request.Request(self.base + "/register", form, {"Sec-Fetch-Site": "same-origin"})
+        with self.assertRaises(urllib.error.HTTPError) as accepted:  # NoRedirect surfaces the 303
+            self.open(request)
+        self.assertEqual(accepted.exception.code, 303)
+
+    def test_register_and_recover_are_rate_limited_per_forwarded_client(self):
+        server.RATE_LIMIT, server.hits = (2, 600), {}
+        try:
+            def attempt(path, client):
+                request = urllib.request.Request(self.base + path, b"name=A", {"X-Forwarded-For": "198.51.100.7, " + client})
+                try:
+                    return self.open(request).status
+                except urllib.error.HTTPError as e:
+                    return e.code
+            self.assertEqual([attempt("/register", "203.0.113.9") for _ in range(2)], [400, 400])
+            self.assertEqual(attempt("/recover", "203.0.113.9"), 429)  # spoofed first hop is ignored
+            self.assertEqual(attempt("/register", "203.0.113.10"), 400)  # other clients unaffected
+            self.assertFalse(server.rate_limited("192.0.2.1", now=0) or server.rate_limited("192.0.2.1", now=1))
+            self.assertTrue(server.rate_limited("192.0.2.1", now=2))
+            self.assertFalse(server.rate_limited("192.0.2.1", now=700))  # window slides
+        finally:
+            server.RATE_LIMIT, server.hits = (20, 600), {}
+
     def test_cap(self):
         server.MAX_REGS = 1
         try:

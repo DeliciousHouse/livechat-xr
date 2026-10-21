@@ -4,7 +4,7 @@ These commands run from the repository root. They do not deploy the relay, insta
 
 ## Relay: real templates, simulated transport
 
-Use Python 3.12 with `PyNaCl==1.6.0` and `tzdata==2026.5` (the current server imports
+Use Python 3.12 with `PyNaCl==1.6.2` and `tzdata==2026.5` (the current server imports
 discovery and IANA timezones). No credentials or TikTok/app packages are needed:
 
 ```bat
