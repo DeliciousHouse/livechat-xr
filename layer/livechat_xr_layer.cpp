@@ -277,40 +277,47 @@ static bool ReadCapped(const std::wstring& path, std::string& out) {
     return true;
 }
 
-// Watches one file; each new write is rasterized and shown for showMs after its write time. Empty file = hide.
-static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs,
-                    void (*raster)(const std::wstring&, std::vector<uint32_t>&)) {
+typedef void (*Raster)(const std::wstring&, std::vector<uint32_t>&);
+
+// One poll of a watched file: a new write is rasterized and shown for showMs after its write time. Empty file = hide.
+static void Poll(Pane* pane, const std::wstring& path, FILETIME& last, std::vector<uint32_t>& px, ULONGLONG showMs, Raster raster) {
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) return;
+    if (CompareFileTime(&fa.ftLastWriteTime, &last) == 0) return;
+    last = fa.ftLastWriteTime;
+    std::string u8;
+    if (!ReadCapped(path, u8)) return;
+    if (u8.empty()) {
+        std::lock_guard<std::mutex> l(g_mx);
+        pane->until = 0;
+        return;
+    }
+    std::wstring text(MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), nullptr, 0), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), text.data(), (int)text.size());
+    FILETIME nowFt;
+    GetSystemTimeAsFileTime(&nowFt);
+    ULONGLONG now = ((ULONGLONG)nowFt.dwHighDateTime << 32) | nowFt.dwLowDateTime;
+    ULONGLONG mt = ((ULONGLONG)last.dwHighDateTime << 32) | last.dwLowDateTime;
+    ULONGLONG ageMs = now > mt ? (now - mt) / 10000 : 0;
+    if (ageMs >= showMs) return;  // stale file from before the game started
+    raster(text, px);
+    std::lock_guard<std::mutex> l(g_mx);
+    pane->pixels.swap(px);
+    pane->dirty = true;
+    pane->until = GetTickCount64() + (showMs - ageMs);
+}
+
+static void Watcher(Pane* pane, const wchar_t* name, ULONGLONG showMs, Raster raster) {
     std::wstring path = g_dir + L"\\" + name;
     FILETIME last{};
     std::vector<uint32_t> px(pane->w * pane->h);
-    for (;;) try {
+    for (;;) {
         Sleep(200);
-        WIN32_FILE_ATTRIBUTE_DATA fa;
-        if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fa)) continue;
-        if (CompareFileTime(&fa.ftLastWriteTime, &last) == 0) continue;
-        last = fa.ftLastWriteTime;
-        std::string u8;
-        if (!ReadCapped(path, u8)) continue;
-        if (u8.empty()) {
-            std::lock_guard<std::mutex> l(g_mx);
-            pane->until = 0;
-            continue;
+        try {
+            Poll(pane, path, last, px, showMs, raster);
+        } catch (...) {
+            Log("watcher error; skipped one update");  // an escaped exception would std::terminate the game
         }
-        std::wstring text(MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), nullptr, 0), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, u8.data(), (int)u8.size(), text.data(), (int)text.size());
-        FILETIME nowFt;
-        GetSystemTimeAsFileTime(&nowFt);
-        ULONGLONG now = ((ULONGLONG)nowFt.dwHighDateTime << 32) | nowFt.dwLowDateTime;
-        ULONGLONG mt = ((ULONGLONG)last.dwHighDateTime << 32) | last.dwLowDateTime;
-        ULONGLONG ageMs = now > mt ? (now - mt) / 10000 : 0;
-        if (ageMs >= showMs) continue;  // stale file from before the game started
-        raster(text, px);
-        std::lock_guard<std::mutex> l(g_mx);
-        pane->pixels.swap(px);
-        pane->dirty = true;
-        pane->until = GetTickCount64() + (showMs - ageMs);
-    } catch (...) {
-        Log("watcher error; skipped one update");  // an escaped exception would std::terminate the game
     }
 }
 

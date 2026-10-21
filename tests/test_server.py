@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import socket
 import time
 import sys
 import tempfile
@@ -595,6 +596,16 @@ class Server(unittest.TestCase):
                 self.assertIn("form-action 'self' https://discord.com", headers["Content-Security-Policy"])
                 for name, value in server.SECURITY_HEADERS.items():
                     self.assertEqual(headers.get_all(name), [value])
+
+    def test_malformed_request_gets_400_not_a_handler_crash(self):
+        # log_message runs before parse_request sets self.path (bad request line, socket timeout).
+        errors = []
+        self.srv.handle_error = lambda request, address: errors.append(address)
+        with socket.create_connection(("127.0.0.1", self.srv.server_port), timeout=5) as conn:
+            conn.sendall(b"\x16\x03\x01 junk request line here\r\n\r\n")
+            reply = conn.recv(4096)
+        self.assertIn(b"Error code: 400", reply)  # HTTP/0.9-style error body: no status line to parse
+        self.assertEqual(errors, [])
 
     def test_cross_site_form_posts_are_rejected(self):
         form = urllib.parse.urlencode(dict(name="A", email="a@example.com", tiktok="a1", webhook=HOOK)).encode()

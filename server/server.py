@@ -1649,8 +1649,10 @@ class Handler(BaseHTTPRequestHandler):
                   f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}" + ("&moved=1" if moved_from else ""))
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
-        if self.path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
-        log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
+        # A timed-out or malformed request is logged before parse_request sets path/command.
+        path, command = getattr(self, "path", "-"), getattr(self, "command", None) or "-"
+        if path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
+        log.info("%s %s", command, re.sub(r"/m/[\w-]+", "/m/…", path.split("?")[0]))
 
 
 def main() -> None:

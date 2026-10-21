@@ -108,9 +108,9 @@ The relay sends its own security headers (see [reference](reference.md#relay-htt
 for `livechat.deliciouswines.org`, keep `reverse_proxy` pointed at the existing upstream and add only:
 
 ```caddyfile
-header Strict-Transport-Security "max-age=31536000"
 reverse_proxy <existing upstream> {
 	header_down -Server
+	header_down Strict-Transport-Security "max-age=31536000"
 }
 request_body {
 	max_size 1MB
