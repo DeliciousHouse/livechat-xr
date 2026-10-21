@@ -20,7 +20,7 @@ class NetworkFixture(unittest.TestCase):
         for scenario in ("normal", "delayed", "closed-dm"):
             with self.subTest(scenario=scenario), \
                     mock.patch.object(server.network.Network, "start", side_effect=AssertionError("must not start")), \
-                    mock.patch.object(server, "discord_exchange", side_effect=AssertionError("no OAuth")), \
+                    mock.patch.object(server, "discord_oauth", side_effect=AssertionError("no OAuth")), \
                     mock.patch.object(server, "discord_identify", side_effect=AssertionError("no identity")):
                 with qa_relay.fixture(network_fixture=True, scenario=scenario) as srv:
                     self.assertEqual(srv.server_address[0], "127.0.0.1")
@@ -39,7 +39,6 @@ class NetworkFixture(unittest.TestCase):
                     self.assertEqual(server.GA_ID, "")
                     self.assertEqual(server.DONATE_URL, "")
                     self.assertEqual(server.DISCORD_ID, "")
-                    self.assertEqual(server.GOOGLE_ID, "")
                     conn = http.client.HTTPConnection("127.0.0.1", srv.server_port, timeout=3)
                     def request(path, method="GET"):
                         conn.request(method, path)

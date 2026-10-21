@@ -7,9 +7,10 @@ subscription returns to one free channel without deleting the others.
 With DONATE_URL set the relay is free for everyone: every plan runs all saved channels and the pages ask for
 donations instead of showing prices (existing paid subscriptions keep working until cancelled).
 
-No accounts: the webhook URL is the credential (whoever has it can already post there). Registering the
-same webhook again updates it. Each registration gets a private manage link, which is also posted into
-their Discord channel so it can't get lost.
+Sign-up is "Log in or sign up with Discord" when DISCORD_CLIENT_ID and PUBLIC_URL are set: one OAuth consent
+(identify email webhook.incoming) identifies the streamer and creates the channel webhook. Without Discord OAuth the
+page falls back to a pasted webhook plus a typed name and email. Each registration gets a private manage link, which
+is also posted into their Discord channel so it can't get lost (owner decision 2026-10-21, docs/architecture.md).
 
     DATA_DIR=./data PORT=13300 python server.py      (needs app/chat.py next to it or on PYTHONPATH)
 """
@@ -18,6 +19,7 @@ import collections
 import hashlib
 import hmac
 import html
+import http.cookies
 import json
 import logging
 import logging.handlers
@@ -46,12 +48,13 @@ PAY_YEARLY = os.environ.get("PAY_YEARLY", "")
 BILLING_URL = os.environ.get("BILLING_URL", "")  # Stripe customer portal login link (manage / cancel)
 STRIPE_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 DONATE_URL = os.environ.get("DONATE_URL", "")  # set = free for everyone + a donate button (e.g. a Stripe pay-what-you-want link)
-DISCORD_ID = os.environ.get("DISCORD_CLIENT_ID", "")  # one-click "Connect Discord" (OAuth scope webhook.incoming)
+DISCORD_ID = os.environ.get("DISCORD_CLIENT_ID", "")  # "Log in or sign up with Discord" (needs PUBLIC_URL too)
 DISCORD_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signed up; unset = no admin page
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 GA_ID = os.environ.get("GA_ID", "")  # Google Analytics 4 measurement ID (G-...); unset = no analytics
-GOOGLE_ID = os.environ.get("GOOGLE_CLIENT_ID", "")  # optional "Continue with Google" fills in a verified name + email
+REGS_PER_DISCORD_USER = 3  # relays one Discord account may own (one per stream/channel); MAX_REGS is still the ceiling
+OAUTH_COOKIE = "lcx_oauth"  # binds an OAuth state to the browser that started it (L1)
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$"),
@@ -609,7 +612,6 @@ input::placeholder{color:var(--placeholder)}
 input:focus{outline:3px solid #8b5cf655;border-color:var(--focus)}
 input[readonly]{color:var(--muted)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.gsi{margin:12px 0 4px;min-height:44px}
 button{padding:12px 18px;border:0;border-radius:14px;background:var(--primary);color:#fff;font:800 16px/1.2 var(--font);cursor:pointer;
 transition:filter .12s ease,transform .12s ease}
 button:hover{filter:brightness(1.08)}button:active{transform:translateY(1px)}
@@ -668,20 +670,17 @@ maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <label for="youtube">YouTube handle</label><input type="text" id="youtube" name="youtube" value="{youtube}" placeholder="@yourhandle or youtube.com URL"
 maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false">
 <div class="hint">{channels_hint}</div>
-{google}<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
-<div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>
+{identity}
 </div></section>
 <section class="step" aria-labelledby="s2"><div class="n" aria-hidden="true">2</div><div><h2 id="s2">Connect Discord</h2>
-{discord}{manual_help}
-<li>In Discord, open a server you own (a new private one is fine) and make a channel like <code>#stream-chat</code>.</li>
-<li>Channel settings (gear) → <b>Integrations</b> → <b>Webhooks</b> → <b>New Webhook</b> → <b>Copy Webhook URL</b>.</li>
-<li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>
+{discord}
 </div></section>
 <section class="step later" aria-labelledby="s3"><div class="n" aria-hidden="true">3</div><div><h2 id="s3">On your Quest</h2>
 <p data-pretext>Install Discord on your Quest if you have not already, open the channel, and set notifications to <b>All Messages</b>.</p></div></section>
 </form>
-<p style="text-align:center"><a href="/recover">Find my relay</a> — lost your private link?</p>
-<footer>Your name and email are only used to know who is using it.{ga_note} Your webhook URL is only used to post your chat.
+<p style="text-align:center"><a href="/recover">Already set up? Log in</a></p>
+<footer>Your Discord username and email (or the name and email you type) are only used to know who is using it
+and to let you log in.{ga_note} Your webhook URL is only used to post your chat.
 Mentions are disabled, so chat can't ping anyone.<br><a href="https://github.com/DeliciousHouse/livechat-xr">Open source on GitHub</a> ·
 <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></footer>"""
 
@@ -712,7 +711,8 @@ except OSError:
 PRIVACY = """<h1>Privacy</h1>
 <p>LiveChat XR relays TikTok LIVE, Twitch and YouTube chat to your chosen Discord channel.
 The private Pop1 Live discovery test is separate: a relay account does not opt you into a listing.</p>
-<h2>Chat relay</h2><p>We store your name, email (typed or verified with Google), supplied channels,
+<h2>Chat relay</h2><p>We store your Discord identity when you sign up or log in with Discord (your Discord user ID, username, display name
+and email if Discord shares a verified one), or the name and email you type where Discord sign-in is not offered; supplied channels,
 resolved platform identities, Discord channel/server IDs and webhook, private manage credential, plan and any Stripe subscription ID.
 These run your relay and let you manage it. Stripe handles payment details. Chat text passes to Discord without being stored here;
 delivery counts, status and troubleshooting logs are retained. Discord receives the messages you ask us to relay.</p>
@@ -744,7 +744,8 @@ server archives, offsite copies and controller rollback archives. Those differen
 In particular, historic backups are not proved erased within 7 days. We do not claim that active listing deletion erases those archives.</p>
 <h2>Analytics and fonts</h2><p>{ga} Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
 no visitor cookies, IP/UA tracking, fingerprinting or click-total proxy. E6 visitor measurement is unavailable.
-Google Fonts supplies this page's font, so your browser contacts Google's servers.</p>
+Google Fonts supplies this page's font, so your browser contacts Google's servers.
+Discord sign-in sets one short-lived cookie (15 minutes) that ties the sign-in to the browser that started it; it is not used for tracking.</p>
 <h2>Questions or deletion help</h2><p>Use the existing <a href="https://github.com/DeliciousHouse/livechat-xr/issues">GitHub issue route</a>
 for help. Issues are public: never include a private manage link, webhook, OAuth code, email or other private data.</p>
 <p><a href="/terms">Terms and service information</a> · <a href="/">Back</a></p>"""
@@ -771,7 +772,7 @@ MANAGE = """<h1>Your relay account</h1>{msg}{checklist}
 <div class="channel-row"><b>Discord:</b> webhook “{dname}”
 <div class="hint">Use Send test message to check delivery.</div>
 <div class="hint" role="status">{delivery}</div></div></section>{billing}
-<p>Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat
+<p>Keep this page's link; it's also posted in your Discord channel.{login} Leave it running: it picks up your chat
 whenever you go live.</p>
 {settings}
 <section class="support"><h2>Need help?</h2><p class="hint">Send a diagnostic with channel names, status and relay version only.
@@ -801,6 +802,23 @@ PROBE_STATUS = '<div hidden aria-hidden="true"><b>Status:</b> {status}</div>'
 
 WEBHOOK_FIELD = ('<label for="webhook">Discord webhook URL</label><input type="url" id="webhook" name="webhook" '
                  'placeholder="https://discord.com/api/webhooks/…" value="{webhook}" maxlength="200"{req}>')
+DISCORD_BUTTON = "Log in or sign up with Discord"
+# Without Discord OAuth (self-hosted or local dev) the page asks for a typed name/email and a pasted webhook instead.
+TYPED_IDENTITY = """<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" value="{name}" required maxlength="60" autocomplete="name"></div>
+<div><label for="email">Email</label><input type="email" id="email" name="email" value="{email}" required maxlength="200" autocomplete="email"></div></div>"""
+MANUAL_WEBHOOK = """<details open><summary>Getting a webhook URL (1 minute)</summary><ol>
+<li>In Discord, open a server you own (a new private one is fine) and make a channel like <code>#stream-chat</code>.</li>
+<li>Channel settings (gear) → <b>Integrations</b> → <b>Webhooks</b> → <b>New Webhook</b> → <b>Copy Webhook URL</b>.</li>
+<li>Paste it above and press Connect. You'll get a test message in that channel.</li></ol></details>"""
+
+
+def discord_on() -> bool:
+    return bool(DISCORD_ID and PUBLIC_URL)  # Discord rejects a relative redirect_uri ("Not a well formed URL")
+
+
+def state_cookie(path: str, state: str) -> str:
+    """Single-use OAuth state, bound to this browser for the 900 s the state itself lives (L1)."""
+    return f"{OAUTH_COOKIE}={state}; Max-Age=900; Path={path}; SameSite=Lax; HttpOnly; Secure"
 
 
 def home(msg: str = "", form: dict | None = None) -> bytes:
@@ -809,29 +827,19 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
     if form.get("platform") in LABEL and form.get("channel"):  # older single-platform form
         chans[form["platform"]] = form["channel"]
     values = {k: html.escape(form.get(k, "")) for k in ("name", "email", "webhook")} | {p: html.escape(c) for p, c in chans.items()}
-    if DISCORD_ID and PUBLIC_URL:  # Discord rejects a relative redirect_uri ("Not a well formed URL")
+    if discord_on():
+        identity = ""  # name and email come from Discord
         discord = ('<p class="hint">No Discord server yet? Discord only lists servers you own or manage. '
                    '<a href="https://discord.com/channels/@me" target="_blank" rel="noopener">Open Discord</a>, tap <b>+</b> → '
                    '<b>Create My Own</b>, add a channel like <code>#stream-chat</code>, then come back here.</p>'
-                   '<button class="cta" name="via" value="discord">Connect Discord</button><p class="hint">Discord asks which server '
-                   'and channel to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>.</p>'
-                   '<details><summary>or paste a webhook URL</summary>'
-                   + WEBHOOK_FIELD.format(req="", webhook=values["webhook"])
-                   + '<button class="cta alt" name="via" value="webhook">Connect with webhook</button></details>')
-        manual = '<details><summary>Getting a webhook URL by hand</summary><ol>'
+                   f'<button class="cta">{DISCORD_BUTTON}</button><p class="hint">Discord asks which server '
+                   'and channel to post in. Pick a channel in a server you own, e.g. a new <code>#stream-chat</code>. '
+                   'Discord also shares your username and email, so you can log in here later.</p>'
+                   '<p class="hint">Already set up? Leave the channels empty and press the button to log in.</p>')
     else:
-        discord = WEBHOOK_FIELD.format(req=" required", webhook=values["webhook"]) + '<button class="cta" style="margin-top:14px">Connect</button>'
-        manual = '<details open><summary>Getting a webhook URL (1 minute)</summary><ol>'
-    google = ""
-    if GOOGLE_ID:  # Google Identity Services: the ID token rides along in the form and is verified in register()
-        google = (f'<script src="https://accounts.google.com/gsi/client" async></script><div id="g_id_onload" '
-                  f'data-client_id="{html.escape(GOOGLE_ID)}" data-callback="gsi" data-auto_prompt="false"></div>'
-                  '<div class="gsi"><div class="g_id_signin" data-type="standard" data-theme="filled_black" data-shape="pill" '
-                  'data-text="continue_with"></div></div><input type="hidden" name="google" id="gcred">'
-                  '<p id="gwho" class="hint">Or type your name and email:</p><script>function gsi(r){'
-                  'var p=JSON.parse(decodeURIComponent(escape(atob(r.credential.split(".")[1].replace(/-/g,"+").replace(/_/g,"/")))));'
-                  'gcred.value=r.credential;name.value=p.name||p.email;email.value=p.email;name.readOnly=email.readOnly=true;'
-                  'gwho.textContent="Signed in with Google ✔"}</script>')
+        identity = TYPED_IDENTITY.format(name=values["name"], email=values["email"])
+        discord = (WEBHOOK_FIELD.format(req=" required", webhook=values["webhook"])
+                   + '<button class="cta" style="margin-top:14px">Connect</button>' + MANUAL_WEBHOOK)
     ga_note = " Visits are counted with Google Analytics." if GA_ID else ""
     if DONATE_URL:
         pricing = ('<span class="chip">Free for every streamer, every channel.</span>'
@@ -845,49 +853,41 @@ def home(msg: str = "", form: dict | None = None) -> bytes:
                    '<p class="hint">Free posts carry a one-line tag; paid posts do not.</p>')
         channels_hint = ("Fill in any of them. On the free plan, only the first filled channel runs (TikTok, then Twitch, then YouTube).\n"
                          "Founders and paid plans run all saved channels in the same Discord channel.")
-    return page(HOME.format(msg=msg, discord=discord, manual_help=manual, google=google, ga_note=ga_note, icon=DISCORD_ICON,
+    return page(HOME.format(msg=msg, discord=discord, identity=identity, ga_note=ga_note, icon=DISCORD_ICON,
                             pricing=pricing, channels_hint=channels_hint, **values) + PRETEXT_JS, ga="/")
 
 
-def google_identity(credential: str) -> tuple[str, str]:
-    """Verify a Google ID token with Google's tokeninfo endpoint; returns (name, email). Raises if it doesn't check out."""
-    url = "https://oauth2.googleapis.com/tokeninfo?" + urllib.parse.urlencode({"id_token": credential})
-    with urllib.request.urlopen(url, timeout=10) as r:
-        t = json.load(r)
-    if (not GOOGLE_ID or t.get("aud") != GOOGLE_ID or t.get("iss") not in ("accounts.google.com", "https://accounts.google.com")
-            or t.get("email_verified") not in ("true", True) or int(t.get("exp", 0)) < time.time()):
-        raise ValueError("Google token rejected")
-    return (t.get("name") or t["email"])[:60], t["email"].lower()
-
-
-def discord_exchange(code: str) -> str:
-    """OAuth code -> the webhook URL Discord created in the channel the user picked."""
-    body = urllib.parse.urlencode({"client_id": DISCORD_ID, "client_secret": DISCORD_SECRET, "grant_type": "authorization_code",
-                                   "code": code, "redirect_uri": f"{PUBLIC_URL}/discord/callback"}).encode()
+def discord_oauth(code: str, callback: str = "/discord/callback") -> tuple[dict, dict]:
+    """OAuth code -> (token response, /users/@me). The token response carries the new webhook when webhook.incoming was
+    granted. Raises unless Discord returned a bearer token and a numeric user ID."""
+    body = urllib.parse.urlencode({"client_id": DISCORD_ID, "client_secret": DISCORD_SECRET,
+        "grant_type": "authorization_code", "code": code, "redirect_uri": f"{PUBLIC_URL}{callback}"}).encode()
     req = urllib.request.Request("https://discord.com/api/oauth2/token", body,
                                  {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "LiveChatXR relay"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.load(r)["webhook"]["url"]
-
-
-def discord_identify(code: str) -> str:
-    """Separate identify flow; neither a webhook nor a posted ID proves an owner."""
-    body = urllib.parse.urlencode({"client_id": DISCORD_ID, "client_secret": DISCORD_SECRET,
-        "grant_type": "authorization_code", "code": code, "redirect_uri": f"{PUBLIC_URL}/network/discord/callback"}).encode()
-    req = urllib.request.Request("https://discord.com/api/oauth2/token", body,
-                                 {"Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(req, timeout=10) as response:
         credential = json.load(response)
     if credential.get("token_type", "").lower() != "bearer" or not credential.get("access_token"):
         raise ValueError("identify failed")
-    req = urllib.request.Request("https://discord.com/api/users/@me",
-                                 headers={"Authorization": "Bearer " + credential["access_token"]})
+    req = urllib.request.Request("https://discord.com/api/users/@me", headers={
+        "Authorization": "Bearer " + credential["access_token"], "User-Agent": "LiveChatXR relay"})
     with urllib.request.urlopen(req, timeout=10) as response:
         identity = json.load(response)
-    owner = identity.get("id")
-    if not isinstance(owner, str) or not re.fullmatch(r"\d{1,22}", owner):
+    if not isinstance(identity.get("id"), str) or not re.fullmatch(r"\d{1,22}", identity["id"]):
         raise ValueError("identify failed")
-    return owner
+    return credential, identity
+
+
+def discord_identify(code: str) -> str:
+    """Separate identify flow; neither a webhook nor a posted ID proves an owner."""
+    return discord_oauth(code, "/network/discord/callback")[1]["id"]
+
+
+def discord_person(me: dict) -> dict:
+    """The fields a registration keeps from /users/@me. Email only when Discord says it is verified (it can be null)."""
+    email = me.get("email") if me.get("verified") is True and isinstance(me.get("email"), str) else ""
+    username = str(me.get("username") or "")[:60]
+    return {"id": me["id"], "username": username, "name": str(me.get("global_name") or username or "Discord user")[:60],
+            "email": email.lower() if EMAIL.match(email) else ""}
 
 
 def listing_profile(r):
@@ -1018,7 +1018,8 @@ def settings_form(token: str, form: dict) -> str:
             '<div class="two"><div><label for="name">Name</label><input type="text" id="name" name="name" '
             f'value="{e(form.get("name", ""))}" required maxlength="60" autocomplete="name"></div>'
             '<div><label for="email">Email</label><input type="email" id="email" name="email" '
-            f'value="{e(form.get("email", ""))}" required maxlength="200" autocomplete="email"></div></div>'
+            f'value="{e(form.get("email", ""))}"' + ('' if regs.get(token, {}).get("discord_id") else ' required')
+            + ' maxlength="200" autocomplete="email"></div></div>'
             + inputs + WEBHOOK_FIELD.format(webhook="", req="").replace("https://discord.com/api/webhooks/…", "Paste a new webhook URL")
             + '<input type="hidden" name="icons_form" value="1"><label class="check"><input type="checkbox" name="platform_icons" value="1"'
             + (' checked' if form.get("platform_icons", True) not in (False, "") else '') + '> Start each message with a platform emoji '
@@ -1028,18 +1029,20 @@ def settings_form(token: str, form: dict) -> str:
 
 
 def recovery_page(msg: str = "") -> bytes:
-    body = '<h1>Find my relay</h1>' + msg
-    if GOOGLE_ID:
-        body += ('<p>Continue with Google using the email saved on your relay account.</p>'
-                 '<form method="post" action="/recover" id="recovery"><input type="hidden" name="google" id="recover-credential">'
-                 '<script src="https://accounts.google.com/gsi/client" async></script>'
-                 f'<div id="g_id_onload" data-client_id="{html.escape(GOOGLE_ID)}" data-callback="recover" data-auto_prompt="false"></div>'
-                 '<div class="gsi"><div class="g_id_signin" data-type="standard" data-theme="filled_black" data-text="continue_with"></div></div>'
-                 '<script>function recover(r){document.getElementById("recover-credential").value=r.credential;'
-                 'document.getElementById("recovery").submit()}</script></form>')
+    body = '<h1>Log in</h1>' + msg
+    if discord_on():
+        body += ('<p>Log in with the Discord account you signed up with to open your private manage page.</p>'
+                 '<form method="post" action="/recover"><button class="cta">Log in with Discord</button></form>'
+                 '<p class="hint">Set up before Discord sign-in? Your private manage link is in the Discord channel you connected. '
+                 'Or sign up again with Discord for the same stream in the same Discord server: that links your existing relay '
+                 'to your Discord account instead of making a new one.</p>')
     else:
-        body += '<p>Google recovery is not available here. Look for your private manage link in the Discord channel you connected.</p>'
+        body += '<p>Discord log-in is not available here. Look for your private manage link in the Discord channel you connected.</p>'
     return page(body + '<p><a href="/">Back to setup</a></p>')
+
+
+def relay_list(found: list[tuple[str, str]]) -> bytes:
+    return page('<h1>Your relays</h1>' + "".join(f'<p><a href="/m/{t}">{html.escape(label)}</a></p>' for t, label in found))
 
 
 def ago(ts: float) -> str:
@@ -1100,7 +1103,7 @@ def admin_body() -> str:
     rows = []
     for t, r in sorted(regs.items(), key=lambda kv: -kv[1]["created"]):
         st = stats.get(t, {})
-        g = " (Google)" if r.get("signin") == "google" else ""
+        g = {"google": " (Google)", "discord": " (Discord)"}.get(r.get("signin"), "")
         rows.append(f"<tr><td>{e(r.get('name', ''))}<br><small>{e(r.get('email', ''))}{g}</small></td>"
                     f"<td>{e(channel_label(r))}<br><small>Discord: {e(r['discord_channel'])}</small></td>"
                     f"<td>{plan(r)}</td><td>{e(status.get(t, ''))}</td>"
@@ -1147,13 +1150,11 @@ def network_totals():
 
 # Inline scripts/styles are part of the approved pages, so script-src keeps 'unsafe-inline'; the policy's value is the
 # origin allowlist plus framing/base/object/form-action limits. form-action needs discord.com: Chrome applies it to the
-# 303 that /register and the listing "link" action send to Discord's OAuth page.
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client "
-       "https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
-       "https://accounts.google.com/gsi/style; font-src https://fonts.gstatic.com; img-src 'self' data: "
-       "https://*.google-analytics.com https://*.googletagmanager.com; connect-src 'self' https://accounts.google.com/gsi/ "
-       "https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; "
-       "frame-src https://accounts.google.com/gsi/; form-action 'self' https://discord.com; base-uri 'none'; "
+# 303 that /register, /recover and the listing "link" action send to Discord's OAuth page.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' "
+       "https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: "
+       "https://*.google-analytics.com https://*.googletagmanager.com; connect-src 'self' "
+       "https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; form-action 'self' https://discord.com; base-uri 'none'; "
        "object-src 'none'; frame-ancestors 'none'")
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000",  # ignored by browsers over plain HTTP (local dev)
@@ -1200,10 +1201,12 @@ class Handler(BaseHTTPRequestHandler):
         forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
         return forwarded or self.client_address[0]
 
-    def send(self, code: int, body: bytes, location: str = "", ctype: str = "text/html; charset=utf-8") -> None:
+    def send(self, code: int, body: bytes, location: str = "", ctype: str = "text/html; charset=utf-8", cookie: str = "") -> None:
         self.send_response(code)
         if location:
             self.send_header("Location", location)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
@@ -1214,6 +1217,57 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def same_browser(self, state: str) -> bool:
+        """The OAuth state came back to the browser that started it (L1): its cookie holds the same value."""
+        try:
+            jar = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        except http.cookies.CookieError:
+            return False
+        held = jar[OAUTH_COOKIE].value if OAUTH_COOKIE in jar else ""
+        return bool(held) and hmac.compare_digest(held.encode(), state.encode())
+
+    def discord_redirect(self, scope: str, wanted: dict) -> None:
+        """Start Discord OAuth. wanted = the channels to sign up; empty = log in only (scope identify, no webhook)."""
+        state = secrets.token_urlsafe(24)
+        with lock:
+            oauth[state] = (time.time(), wanted)
+        q = urllib.parse.urlencode({"client_id": DISCORD_ID, "response_type": "code", "scope": scope,
+                                    "redirect_uri": f"{PUBLIC_URL}/discord/callback", "state": state})
+        self.send(303, b"", location=f"https://discord.com/oauth2/authorize?{q}", cookie=state_cookie("/discord/callback", state))
+
+    def discord_callback(self) -> None:
+        q = {k: v[0] for k, v in parse_qs(self.path.partition("?")[2]).items()}
+        state = q.get("state", "")
+        with lock:
+            for k in [k for k, (t, _) in oauth.items() if time.time() - t > 900]:
+                oauth.pop(k)
+            entry = oauth.pop(state, None)  # single use, even when the browser check below fails
+        if not entry:
+            return self.send(400, home(note(f"That Discord sign-in expired. Press {DISCORD_BUTTON} again.", True)))
+        wanted = entry[1]
+        if not self.same_browser(state):
+            # Quest and phones often finish Discord's consent in Discord's own browser, which never saw our cookie.
+            return self.send(400, home(note("Discord sign-in finished in a different browser from the one that started it. "
+                                            f"Start again here, in this browser: press {DISCORD_BUTTON} below.", True), wanted))
+        if "code" not in q:
+            return self.send(400, home(note("Discord sign-in was cancelled. Try again when you're ready.", True), wanted))
+        try:
+            credential, me = discord_oauth(q["code"])
+        except Exception as e:
+            log.warning("discord oauth: %s", type(e).__name__)  # never the code or response
+            return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True), wanted))
+        person = discord_person(me)
+        if not wanted:  # log in
+            with lock:
+                mine = [(t, channel_label(r)) for t, r in regs.items() if r.get("discord_id") == person["id"]]
+            if len(mine) == 1:
+                return self.send(303, b"", location=f"/m/{mine[0][0]}")
+            if mine:
+                return self.send(200, relay_list(mine))
+            return self.send(200, home(note("No relay is linked to this Discord account yet. Enter your channel, "
+                                            f"then press {DISCORD_BUTTON}.")))
+        return self.register({**wanted, "webhook": str((credential.get("webhook") or {}).get("url") or "")}, discord=person)
 
     def manage(self, token: str, msg: str = "", new: str = "", *, code: int = 200, form=None, network_errors=None, network_form=None) -> None:
         r = regs.get(token)
@@ -1259,8 +1313,9 @@ class Handler(BaseHTTPRequestHandler):
             dname=html.escape(r["discord_channel"]) + (f' · <a href="{open_link}" target="_blank" rel="noopener">Open this channel in Discord</a>'
                                                          if open_link else ""),
             delivery=html.escape(delivery_status(token)),
-            settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing) + listing,
-            ga="" if listing else "/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("google", "email") else "")
+            settings=settings_form(token, form if form is not None else {**r, **channels(r)}), billing=billing,
+            login=' You can also <a href="/recover">log in with Discord</a>.' if r.get("discord_id") else "") + listing,
+            ga="" if listing else "/m/", event=f"gtag('event','sign_up',{{method:'{new}'}});" if new in ("discord", "email") else "")
             .replace(b'</main>', (PROBE_STATUS.format(status=html.escape(status.get(token, "starting…"))) + '</main>').encode()))
 
     def do_GET(self):
@@ -1300,21 +1355,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
             return self.send(200, page(admin_body()))
         if path == "/discord/callback":
-            q = {k: v[0] for k, v in parse_qs(self.path.partition("?")[2]).items()}
-            with lock:
-                for k in [k for k, (t, _) in oauth.items() if time.time() - t > 900]:
-                    oauth.pop(k)
-                entry = oauth.pop(q.get("state", ""), None)
-            if not entry:
-                return self.send(400, home(note("That Discord sign-in expired. Please fill in the form again.", True)))
-            if "code" not in q:
-                return self.send(400, home(note("Discord connection was cancelled. Try again, or paste a webhook URL instead.", True)))
-            try:
-                webhook = discord_exchange(q["code"])
-            except Exception as e:
-                log.warning("discord oauth: %s", type(e).__name__)  # never the code or response
-                return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True)))
-            return self.register({**entry[1], "webhook": webhook, "via": "webhook"})
+            return self.discord_callback()
         if path == "/privacy":
             ga = ("Visits to these pages are counted with Google Analytics (pages viewed, rough location, device type)."
                   if GA_ID else "None.")
@@ -1329,7 +1370,7 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(self.path.partition("?")[2])
             msg = note("Settings saved. Your plan and private link are unchanged.") if q.get("saved") == ["1"] else ""
             if q.get("moved") == ["1"]:
-                msg += note("You already had a relay for this stream in this Discord server. It now posts to the channel you just picked; nothing is duplicated.")
+                msg += note("You already had a relay for this stream. It now posts to the channel you just picked; nothing is duplicated.")
             return self.manage(m[1], msg=msg,
                                new=q.get("new", [""])[0])
         self.send(404, page(note("Not found.", True)))
@@ -1360,7 +1401,7 @@ class Handler(BaseHTTPRequestHandler):
         if n < 0: return self.send(400, b"invalid length")
         if self.path == "/stripe-webhook" and n <= 512 * 1024:
             return self.stripe(self.rfile.read(n))
-        if n > 8192:  # a Google ID token is ~1.2 KB
+        if n > 8192:  # every form here is a few short fields
             return self.send(413, page(note("Too much data.", True)))
         form = {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         path = self.path.split("?")[0]
@@ -1373,8 +1414,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.network_post(m[1], form)
         if path == "/register":
             return self.register(form)
-        if path == "/recover":
-            return self.recover(form)
+        if path == "/recover":  # Log in: identify only, so Discord creates no webhook
+            if not discord_on():
+                return self.send(400, recovery_page(note("Discord log-in is not configured here.", True)))
+            return self.discord_redirect("identify", {})
         m = re.fullmatch(r"/m/([\w-]{20,64})/(test|delete|save|report)", path)
         if not m or m[1] not in regs:
             return self.send(404, page(note("That link isn't active.", True)))
@@ -1411,10 +1454,13 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             for key, (created, _) in list(network_oauth.items()):
                 if time.monotonic() - created >= 900: network_oauth.pop(key, None)
-            entry = network_oauth.pop(q.get("state", [""])[0], None)
+            state = q.get("state", [""])[0]
+            entry = network_oauth.pop(state, None)
             r = regs.get(entry[1]) if entry else None
-            if not entry or not NETWORK_WEB_PRIVATE or not r or not r.get("network_requested") or not q.get("code"):
-                return self.send(400, page(note("Discord sign-in expired or was cancelled. Return to your private manage page and try again.", True)))
+            if (not entry or not NETWORK_WEB_PRIVATE or not r or not r.get("network_requested") or not q.get("code")
+                    or not self.same_browser(state)):
+                return self.send(400, page(note("Discord sign-in expired, was cancelled or finished in a different browser. "
+                                                "Return to your private manage page in this browser and try again.", True)))
             csrf = network_csrf.get(entry[1])
         try:
             owner = discord_identify(q["code"][0])
@@ -1475,7 +1521,8 @@ class Handler(BaseHTTPRequestHandler):
                     network_oauth[state] = (time.monotonic(), token)
                     q = urllib.parse.urlencode(dict(client_id=DISCORD_ID, response_type="code", scope="identify",
                         redirect_uri=f"{PUBLIC_URL}/network/discord/callback", state=state))
-                    return self.send(303, b"", location="https://discord.com/oauth2/authorize?" + q)
+                    return self.send(303, b"", location="https://discord.com/oauth2/authorize?" + q,
+                                     cookie=state_cookie("/network/discord/callback", state))
                 else:
                     if not profile or not profile["opted_in"] or not r.get("network_requested"):
                         return self.manage(token, note("Save listing consent and link your Discord identity first.", True), code=409)
@@ -1537,22 +1584,8 @@ class Handler(BaseHTTPRequestHandler):
                 chat.post_discord(regs[token]["webhook"], "LiveChat XR: your subscription ended. " + message)
         self.send(200, b"ok")
 
-    def recover(self, form: dict) -> None:
-        try:
-            if not GOOGLE_ID or not form.get("google"):
-                raise ValueError
-            _, email = google_identity(form["google"])
-        except Exception:
-            return self.send(400, recovery_page(note("Please continue with Google to verify your email.", True)))
-        with lock:
-            matches = [(t, channel_label(r)) for t, r in regs.items() if r.get("email", "").lower() == email.lower()]
-        if len(matches) == 1:
-            return self.send(303, b"", location=f"/m/{matches[0][0]}")
-        if matches:
-            return self.send(200, page('<h1>Your relays</h1>' + "".join(f'<p><a href="/m/{t}">{html.escape(label)}</a></p>' for t, label in matches)))
-        self.send(200, recovery_page(note("No relay matches your verified Google email. Try another Google account or set up a relay.")))
-
-    def register(self, form: dict, edit_token: str = "") -> None:
+    def register(self, form: dict, edit_token: str = "", discord: dict | None = None) -> None:
+        """New sign-up, settings save (edit_token) or the Discord callback (discord = the verified Discord identity)."""
         def fail(message, code=400):
             if edit_token:
                 return self.manage(edit_token, note(message, True), code=code, form=form)
@@ -1561,18 +1594,17 @@ class Handler(BaseHTTPRequestHandler):
         if not wanted and form.get("platform") in LABEL and form.get("channel", "").strip():  # older single-platform form
             wanted[form["platform"]] = normalise_channel(form["platform"], form["channel"])
         webhook = form.get("webhook", "") or (regs[edit_token]["webhook"] if edit_token else "")
-        err = None
-        if form.get("google") and GOOGLE_ID:
-            try:
-                form["name"], form["email"] = google_identity(form["google"])
-                form["signin"] = "google"
-            except Exception as e:
-                log.warning("google sign-in: %s", type(e).__name__)  # never the ID token
-                err = "Google sign-in didn't go through. Try again, or type your name and email."
+        # With Discord OAuth configured, every new registration comes back through the callback with a Discord identity;
+        # a posted webhook alone can't create one (M2).
+        via_discord = not edit_token and not discord and discord_on()
+        if via_discord and not wanted:
+            return self.discord_redirect("identify", {})  # no channels typed: log in
+        if discord:
+            form.update(name=discord["name"], email=discord["email"], signin="discord")
         name, email = form.get("name", "")[:60], form.get("email", "").lower()
-        if err:
-            pass
-        elif not name or not EMAIL.match(email):
+        linked = bool(discord) or bool(edit_token and regs[edit_token].get("discord_id"))  # Discord may share no email
+        err = None
+        if not via_discord and (not name or ((email or not linked) and not EMAIL.match(email))):
             err = "Please enter your name and a valid email."
         elif not wanted:
             err = "Enter your TikTok handle, your Twitch channel, your YouTube handle, or any mix."
@@ -1591,14 +1623,9 @@ class Handler(BaseHTTPRequestHandler):
                 return fail(f"We can't find that {LABEL[p]} account. Check the spelling, without the @")
             if exists is None:
                 channel_note = "We couldn't verify your account right now. You're signed up; check the spelling if chat doesn't connect."
-        if not edit_token and form.get("via") == "discord" and DISCORD_ID and PUBLIC_URL:
-            state = secrets.token_urlsafe(24)
-            with lock:
-                oauth[state] = (time.time(), {k: form.get(k, "") for k in ("name", "email", "signin")} | wanted)
-            q = urllib.parse.urlencode({"client_id": DISCORD_ID, "response_type": "code", "scope": "webhook.incoming",
-                                        "redirect_uri": f"{PUBLIC_URL}/discord/callback", "state": state})
-            return self.send(303, b"", location=f"https://discord.com/oauth2/authorize?{q}")
-        elif not WEBHOOK.match(webhook):
+        if via_discord:  # one consent: who you are, plus a webhook in the channel you pick
+            return self.discord_redirect("identify email webhook.incoming", wanted)
+        if not WEBHOOK.match(webhook):
             err = "That isn't a Discord webhook URL. It should start with https://discord.com/api/webhooks/"
         if err:
             return fail(err)
@@ -1612,15 +1639,29 @@ class Handler(BaseHTTPRequestHandler):
             owner = next((t for t, r in regs.items() if r["webhook"] == webhook), None)
             if edit_token and owner and owner != edit_token:
                 return fail("That webhook is already connected to another relay. Use a different webhook.")
+            did = discord["id"] if discord else ""
+            mine = [t for t, r in regs.items() if did and r.get("discord_id") == did]
+            if not edit_token and not owner:
+                # The same Discord account signing up the same stream again moves that relay to the channel just picked.
+                owner = next((t for t in mine if same_channels(channels(regs[t]), wanted)), None)
             if not edit_token and not owner and guild:
                 # Signing up again for the same stream in the same Discord server replaces the earlier relay instead of
                 # running a duplicate. Keyed by server, not email: only someone who manages that server can make its webhook.
+                # This is also how a relay from before Discord sign-in gets linked to a Discord account.
                 owner = next((t for t, r in regs.items() if r.get("guild_id") == guild and same_channels(channels(r), wanted)), None)
-                moved_from = regs[owner]["webhook"] if owner else ""
+                if owner and did and regs[owner].get("discord_id", did) != did:
+                    return fail("This stream already posts into this Discord server from another Discord account. "
+                                "Ask them to remove it, or pick a channel in a different server.", 409)
+            if not edit_token and not owner and len(mine) >= REGS_PER_DISCORD_USER:
+                return fail(f"This Discord account already has {REGS_PER_DISCORD_USER} relays. Log in and edit one of them, "
+                            "or delete one first.", 409)
+            if not edit_token and owner and regs[owner]["webhook"] != webhook:
+                moved_from = regs[owner]["webhook"]
             token = edit_token or owner
             if token is None and len(regs) >= MAX_REGS:
                 return fail("This server is full right now. Try again later.", 503)
             old = regs.get(token, {}) if token else {}
+            email = email or (old.get("email", "") if discord else "")
             token = token or secrets.token_urlsafe(24)
             p = plan(old) if old else ("founder" if free_used() < FREE_SLOTS else "free")
             if p == "founder" and token not in founders:
@@ -1631,7 +1672,8 @@ class Handler(BaseHTTPRequestHandler):
                            "discord_channel": dname, "guild_id": guild, "channel_id": str(hook.get("channel_id") or ""),
                            "created": old.get("created", int(time.time())), "plan": p,
                            "signin": form.get("signin") or old.get("signin", "email"), "channel_note": channel_note,
-                           "platform_icons": bool(form.get("platform_icons")) if form.get("icons_form") else old.get("platform_icons", True)}
+                           "platform_icons": bool(form.get("platform_icons")) if form.get("icons_form") else old.get("platform_icons", True),
+                           **({"discord_id": did, "discord_username": discord["username"]} if discord else {})}
             regs[token]["identities"] = {p: ident for p, ident in old.get("identities", {}).items()
                                           if p in wanted and channels(old).get(p) == wanted[p]}
             if edit_token:
@@ -1644,9 +1686,9 @@ class Handler(BaseHTTPRequestHandler):
         chat.post_discord(webhook, f"LiveChat XR connected ✔ Chat from {active} will show up here while you're live.{waiting}\n"
                                    f"Manage or stop it: <{manage_url(token)}>")
         if moved_from and moved_from != webhook:  # the audit trail stays in the old channel, without the private link
-            chat.post_discord(moved_from, f"LiveChat XR: chat from {active} moved to another channel in this server after a new sign-up.")
+            chat.post_discord(moved_from, f"LiveChat XR: chat from {active} moved to another Discord channel after a new sign-up.")
         self.send(303, b"", location=f"/m/{token}?saved=1" if edit_token else
-                  f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}" + ("&moved=1" if moved_from else ""))
+                  f"/m/{token}?new={'discord' if discord else 'email'}" + ("&moved=1" if moved_from else ""))
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
         # A timed-out or malformed request is logged before parse_request sets path/command.
@@ -1684,7 +1726,7 @@ def main() -> None:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log.info("listening on :%d with %d registrations", PORT, len(regs))
     if DISCORD_ID and not PUBLIC_URL:
-        log.error("DISCORD_CLIENT_ID is set but PUBLIC_URL is empty: Connect Discord is hidden until PUBLIC_URL is in the env file")
+        log.error("DISCORD_CLIENT_ID is set but PUBLIC_URL is empty: Discord sign-up is off (typed form shown) until PUBLIC_URL is in the env file")
     previous_term = signal.signal(signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(loop.stop))
     try:
         loop.run_forever()

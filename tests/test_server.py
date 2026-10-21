@@ -468,32 +468,88 @@ class Server(unittest.TestCase):
         self.assertIn("Founder: all your channels free forever.", body)
         self.assertNotIn("client_reference_id", body)
 
-    def test_discord_one_click(self):
-        server.DISCORD_ID, server.PUBLIC_URL = "123", "https://relay.example"
-        server.discord_exchange = lambda code: HOOK if code == "good" else (_ for _ in ()).throw(ValueError("bad code"))
-        try:
-            self.assertIn(b"Connect Discord", urllib.request.urlopen(self.base + "/").read())
-            code, headers, _ = self.post("/register", name="A", email="a@example.com", platform="tiktok", channel="a1", via="discord")
-            loc = urllib.parse.urlparse(headers["Location"])
-            q = dict(urllib.parse.parse_qsl(loc.query))
-            self.assertEqual((code, loc.netloc, q["scope"], q["redirect_uri"]),
-                             (303, "discord.com", "webhook.incoming", "https://relay.example/discord/callback"))
-            self.assertEqual(server.regs, {})  # nothing saved until Discord comes back
-            bad = self.open  # forged/unknown state is refused
-            with self.assertRaises(urllib.error.HTTPError):
-                bad(f"{self.base}/discord/callback?state=nope&code=good")
-            r = None
+    def discord(self, me, path="/register", hook=HOOK, cookie=True, **form):
+        """Press the Discord button, then come back from Discord as `me`. Returns (code, headers, body, authorize query)."""
+        code, headers, _ = self.post(path, **form)
+        self.assertEqual(code, 303)
+        query = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(headers["Location"]).query))
+        jar = headers["Set-Cookie"].split(";")[0] if cookie is True else cookie
+        token = {"token_type": "Bearer", "access_token": "fixture"} | ({"webhook": {"url": hook}} if "webhook" in query["scope"] else {})
+        with mock.patch.object(server, "discord_oauth", return_value=(token, me)):
+            request = urllib.request.Request(f"{self.base}/discord/callback?state={query['state']}&code=good",
+                                             headers={"Cookie": jar} if jar else {})
             try:
-                bad(f"{self.base}/discord/callback?state={q['state']}&code=good")
+                with self.open(request) as response:
+                    return response.status, response.headers, response.read().decode(), query
             except urllib.error.HTTPError as e:
-                r = e
-            self.assertEqual(r.code, 303)  # redirect to the manage page
+                return e.code, e.headers, e.read().decode(), query
+
+    ANN = {"id": "42", "username": "ann", "global_name": "Ann A", "email": "Ann@Example.com", "verified": True}
+
+    def test_discord_sign_up_stores_identity_and_log_in_finds_it(self):
+        with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+            home = urllib.request.urlopen(self.base + "/").read().decode()
+            self.assertIn(">Log in or sign up with Discord</button>", home)
+            self.assertNotIn('name="email"', home)  # identity comes from Discord
+            self.assertNotIn('name="webhook"', home)  # a pasted webhook can't create a registration
+            code, headers, body, query = self.discord(self.ANN, twitch="ann1")
+            self.assertEqual((query["scope"], query["redirect_uri"]), ("identify email webhook.incoming",
+                                                                        "https://relay.example/discord/callback"))
             (token, reg), = server.regs.items()
-            self.assertEqual((reg["webhook"], reg["channel"], reg["plan"]), (HOOK, "@a1", "founder"))
-            with self.assertRaises(urllib.error.HTTPError):  # a state works once
-                bad(f"{self.base}/discord/callback?state={q['state']}&code=good")
-        finally:
-            server.DISCORD_ID, server.PUBLIC_URL = "", ""
+            self.assertEqual((code, headers["Location"]), (303, f"/m/{token}?new=discord"))
+            self.assertEqual((reg["discord_id"], reg["discord_username"], reg["name"], reg["email"], reg["signin"], reg["webhook"]),
+                             ("42", "ann", "Ann A", "ann@example.com", "discord", HOOK))
+            # Log in from /recover or from the home button with no channels: identify only, no webhook, no new relay.
+            for path in ("/recover", "/register"):
+                code, headers, _, query = self.discord(self.ANN, path=path)
+                self.assertEqual((query["scope"], code, headers["Location"]), ("identify", 303, f"/m/{token}"))
+            # The same Discord account signing up the same stream again moves it to the new channel, no duplicate.
+            code, headers, _, _ = self.discord(self.ANN, hook=HOOK[:-1] + "b", twitch="ANN1")
+            self.assertEqual((code, headers["Location"]), (303, f"/m/{token}?new=discord&moved=1"))
+            self.assertEqual((list(server.regs), server.regs[token]["webhook"]), ([token], HOOK[:-1] + "b"))
+            # Existing manage-token flows are unchanged; Discord may share no email, so settings save without one.
+            self.assertEqual(self.post(f"/m/{token}/save", name="Ann", email="", twitch="ann1")[0], 303)
+            self.assertEqual(self.post(f"/m/{token}/test")[0], 200)
+            self.assertIn("log in with Discord", urllib.request.urlopen(f"{self.base}/m/{token}").read().decode())
+            self.assertEqual(self.post(f"/m/{token}/delete")[0], 200)
+            code, _, body, _ = self.discord(self.ANN, path="/recover")
+            self.assertEqual((code, server.regs), (200, {}))
+            self.assertIn("No relay is linked to this Discord account yet", body)
+
+    def test_discord_relays_per_account_are_capped(self):
+        with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+            for i in range(server.REGS_PER_DISCORD_USER):
+                self.assertEqual(self.discord(self.ANN, hook=HOOK[:-1] + str(i), twitch=f"stream{i}")[0], 303)
+            code, _, body, _ = self.discord(self.ANN, hook=HOOK[:-1] + "x", twitch="another")
+            self.assertEqual((code, len(server.regs)), (409, server.REGS_PER_DISCORD_USER))
+            self.assertIn("already has 3 relays", body)
+            code, _, body, _ = self.discord(self.ANN, path="/recover")
+            self.assertEqual(code, 200)
+            self.assertTrue(all(f"/m/{t}" in body for t in server.regs))
+            self.assertEqual(self.discord(dict(self.ANN, id="43"), hook=HOOK[:-1] + "y", twitch="another")[0], 303)
+
+    def test_discord_state_is_bound_to_the_starting_browser(self):
+        with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+            for cookie in ("", "lcx_oauth=someone-elses-state"):
+                with mock.patch.object(server, "discord_person", side_effect=AssertionError("must not exchange")):
+                    code, _, body, query = self.discord(self.ANN, cookie=cookie, twitch="ann1")
+                self.assertEqual((code, server.regs), (400, {}))
+                self.assertIn("finished in a different browser", body)
+                self.assertIn('name="twitch" value="ann1"', body)  # start again here without retyping
+                self.assertNotIn(query["state"], server.oauth)  # single use, even on a mismatch
+            _, headers, _ = self.post("/register", twitch="ann1")
+            self.assertEqual(headers["Set-Cookie"].split(";", 1)[1].strip(),
+                             "Max-Age=900; Path=/discord/callback; SameSite=Lax; HttpOnly; Secure")
+
+    def test_discord_person_keeps_only_verified_email(self):
+        self.assertEqual(server.discord_person({"id": "1", "username": "u", "email": "u@example.com", "verified": False}),
+                         {"id": "1", "username": "u", "name": "u", "email": ""})
+        self.assertEqual(server.discord_person({"id": "1", "username": "u", "email": None, "verified": True})["email"], "")
+
+    def test_posted_webhook_cannot_create_a_registration_with_discord_on(self):
+        with mock.patch.multiple(server, DISCORD_ID="123", PUBLIC_URL="https://relay.example"):
+            code, headers, _ = self.post("/register", name="A", email="a@example.com", twitch="ann1", webhook=HOOK)
+            self.assertEqual((code, urllib.parse.urlparse(headers["Location"]).netloc, server.regs), (303, "discord.com", {}))
 
     def test_discord_one_click_hidden_without_public_url(self):
         # A relative redirect_uri makes Discord answer "Not a well formed URL" (2026-10-14 sign-up failure).
@@ -527,22 +583,6 @@ class Server(unittest.TestCase):
             self.assertFalse(any("k" * 32 in line for line in cm.output), "admin key must not be logged")
         finally:
             server.ADMIN_KEY = ""
-
-    def test_google_sign_in(self):
-        server.GOOGLE_ID = "cid.apps.googleusercontent.com"
-        server.google_identity = lambda cred: ("Gina G", "gina@example.com") if cred == "good" else (_ for _ in ()).throw(ValueError)
-        try:
-            self.assertIn(b'data-client_id="cid.apps.googleusercontent.com"', urllib.request.urlopen(self.base + "/").read())
-            # the verified Google identity wins over whatever the form says
-            code, headers, _ = self.post("/register", google="good", name="x", email="spoof@example.com",
-                                         platform="tiktok", channel="g1", webhook=HOOK)
-            self.assertEqual((code, headers["Location"].split("?")[1]), (303, "new=google"))
-            (reg,) = server.regs.values()
-            self.assertEqual((reg["name"], reg["email"], reg["signin"]), ("Gina G", "gina@example.com", "google"))
-            self.assertEqual(self.post("/register", google="forged", name="A", email="a@example.com",
-                                       platform="tiktok", channel="g1", webhook=HOOK)[0], 400)
-        finally:
-            server.GOOGLE_ID = ""
 
     def test_analytics_never_sees_manage_token(self):
         server.GA_ID = "G-TEST123"

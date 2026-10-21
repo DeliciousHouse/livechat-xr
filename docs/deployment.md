@@ -18,10 +18,27 @@ The build uploads one installer and `SHA256SUMS`; the release job downloads and
 verifies the checksum before publishing both assets with generated notes.
 Suffixed tags (`-` or `+`) are pre-releases and never become latest. Re-running
 the tag workflow updates the same release/assets. Never move an existing tag.
-Download both assets and run `sha256sum --check SHA256SUMS` (PowerShell users:
-`Get-FileHash LiveChatXR-Setup-*.exe -Algorithm SHA256`). SHA256 detects accidental
-corruption; it is not code signing. Installer elevation and current icon/branding
-acceptance remain separate PC release checks.
+The release job also publishes a GitHub build provenance attestation for the
+installer and `SHA256SUMS` (`actions/attest-build-provenance`; only this job gets
+`id-token: write` and `attestations: write`). Installer elevation and current
+icon/branding acceptance remain separate PC release checks.
+
+### Verify a release download
+
+1. Download the installer and `SHA256SUMS` from the release **Assets**.
+2. With the [GitHub CLI](https://cli.github.com/), run
+   `gh attestation verify LiveChatXR-Setup-<version>.exe -R DeliciousHouse/livechat-xr`
+   (and the same for `SHA256SUMS`). It passes only for a file built by this
+   repository's release workflow, from the tagged commit it prints.
+3. Optionally run `sha256sum --check SHA256SUMS` (PowerShell:
+   `Get-FileHash LiveChatXR-Setup-*.exe -Algorithm SHA256`). SHA256 alone only
+   detects accidental corruption, since the checksum ships beside the binary.
+
+Attestations are not code signing: Windows SmartScreen still warns on the
+installer, and the in-game layer DLL is still unsigned. Removing that warning
+needs paid code signing, either Azure Trusted Signing (about $10 a month) or an
+OV code-signing certificate. That is an owner decision; on 2026-10-21 the owner
+chose free attestations first and paid signing later (security review M4).
 
 ## Dora pull deploy
 
@@ -30,7 +47,7 @@ The user systemd timer reads this public repo and public exact-head check status
 It needs no GitHub/tailnet key and cannot receive PR jobs. Only reviewed main with
 a completed, successful latest `full-suite` is eligible. GitHub rate limits/errors
 fail closed. The existing node Docker access is host-root-equivalent; never give
-it to a runner. Stripe/Google/Discord secrets stay in `~/.livechat-xr.env` (0600).
+it to a runner. Stripe/Discord secrets stay in `~/.livechat-xr.env` (0600).
 
 Dora owns installation and the live operation card. From a reviewed source tree:
 
