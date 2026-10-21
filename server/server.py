@@ -54,7 +54,7 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "")  # /admin?key=... lists who is signe
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 GA_ID = os.environ.get("GA_ID", "")  # Google Analytics 4 measurement ID (G-...); unset = no analytics
 REGS_PER_DISCORD_USER = 3  # relays one Discord account may own (one per stream/channel); MAX_REGS is still the ceiling
-OAUTH_COOKIE = "lcx_oauth"  # binds an OAuth state to the browser that started it (L1)
+STATE_COOKIE_NAME = "lcx_oauth"  # Public cookie name, not a credential; its value is single-use browser-bound state (L1).
 WEBHOOK = re.compile(r"^https://(?:(?:ptb|canary)\.)?discord(?:app)?\.com/api/webhooks/\d{15,22}/[\w-]{40,100}$")
 EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]{1,190}\.[A-Za-z]{2,}$")
 CHANNEL = {"tiktok": re.compile(r"^@?[A-Za-z0-9_.]{2,24}$"), "twitch": re.compile(r"^#?[A-Za-z0-9_]{3,25}$"),
@@ -818,7 +818,7 @@ def discord_on() -> bool:
 
 def state_cookie(path: str, state: str) -> str:
     """Single-use OAuth state, bound to this browser for the 900 s the state itself lives (L1)."""
-    return f"{OAUTH_COOKIE}={state}; Max-Age=900; Path={path}; SameSite=Lax; HttpOnly; Secure"
+    return f"{STATE_COOKIE_NAME}={state}; Max-Age=900; Path={path}; SameSite=Lax; HttpOnly; Secure"
 
 
 def home(msg: str = "", form: dict | None = None) -> bytes:
@@ -1224,7 +1224,7 @@ class Handler(BaseHTTPRequestHandler):
             jar = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
         except http.cookies.CookieError:
             return False
-        held = jar[OAUTH_COOKIE].value if OAUTH_COOKIE in jar else ""
+        held = jar[STATE_COOKIE_NAME].value if STATE_COOKIE_NAME in jar else ""
         return bool(held) and hmac.compare_digest(held.encode(), state.encode())
 
     def discord_redirect(self, scope: str, wanted: dict) -> None:

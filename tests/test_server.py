@@ -567,8 +567,9 @@ class Server(unittest.TestCase):
                 self.assertIn('name="twitch" value="ann1"', body)  # start again here without retyping
                 self.assertNotIn(query["state"], server.oauth)  # single use, even on a mismatch
             _, headers, _ = self.post("/register", twitch="ann1")
-            self.assertEqual(headers["Set-Cookie"].split(";", 1)[1].strip(),
-                             "Max-Age=900; Path=/discord/callback; SameSite=Lax; HttpOnly; Secure")
+            state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(headers["Location"]).query))["state"]
+            self.assertEqual(headers["Set-Cookie"],
+                             f"lcx_oauth={state}; Max-Age=900; Path=/discord/callback; SameSite=Lax; HttpOnly; Secure")
 
     def test_discord_person_keeps_only_verified_email(self):
         self.assertEqual(server.discord_person({"id": "1", "username": "u", "email": "u@example.com", "verified": False}),
