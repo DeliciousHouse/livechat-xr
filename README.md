@@ -73,6 +73,8 @@ coexistence is still unverified; APK delivery does not pass the background-audio
 
 The PC layer runs inside the game process. Only enable it where third-party OpenXR overlays are allowed; anti-cheat compatibility is not guaranteed. Uninstall removes its machine-wide registration. `LIVECHATXR_DISABLE=1` in the game's environment is the layer kill switch.
 
+Viewer text is posted to Discord with mentions disabled and link previews suppressed, and one chat message is always one banner line.
+
 Webhook URLs, private manage links, keys, config files and backups can grant access or contain private data. Do not post them in support issues. **Stop and delete does not cancel paid billing**; use the Stripe billing portal separately. See [troubleshooting](docs/user-guide.md#troubleshooting) or [report a problem](https://github.com/DeliciousHouse/livechat-xr/issues) with sanitized steps and your platform/version.
 
 For isolated relay simulation and visible Windows Settings without touching the installed profile,

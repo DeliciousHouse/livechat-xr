@@ -93,6 +93,20 @@ int main() {
         }
         CHECK(located == (follow == 0 ? 0 : 2));
     }
+    // Untrusted-size inputs: config values are clamped/finite and IPC files are read with a hard cap.
+    CHECK(Clamp(100, 0.1f, 10, 1) == 10 && Clamp(-3, 0.1f, 10, 1) == 0.1f && Clamp(2, 0.1f, 10, 1) == 2);
+    CHECK(Clamp(INFINITY, 0, 5, 1) == 1 && Clamp(NAN, 0, 5, 1) == 1);
+    wchar_t tmp[MAX_PATH], file[MAX_PATH];
+    CHECK(GetTempPathW(MAX_PATH, tmp) && GetTempFileNameW(tmp, L"lcx", 0, file));
+    FILE* big = _wfopen(file, L"wb");
+    CHECK(big);
+    std::string chunk(1024 * 1024, 'x');
+    fwrite(chunk.data(), 1, chunk.size(), big);
+    fclose(big);
+    std::string read;
+    CHECK(ReadCapped(file, read) && read.size() == MAX_FILE);
+    DeleteFileW(file);
+    CHECK(!ReadCapped(file, read));
     puts("VIEW-locked zero offsets and LOCAL positive-follow control: OK");
     return 0;
 }

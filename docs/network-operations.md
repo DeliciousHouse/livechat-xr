@@ -139,7 +139,7 @@ HTTP ACK/follow-up; (2) complete collector polling and consent-preserving writes
 (3) incidents/admin; (4) online sanitized backup and unbound restore; (5) hosted chat
 isolation. `/optin` user UX and posted-list E2E are still C's work, not claimed here.
 
-Run Python 3.12 with `PyNaCl==1.6.0`, `tzdata==2026.5`, and app requirements for the
+Run Python 3.12 with `PyNaCl==1.6.2`, `tzdata==2026.5`, and app requirements for the
 full Windows suite:
 
 ```sh

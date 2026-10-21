@@ -55,6 +55,15 @@ class Layer(unittest.TestCase):
                 if text and "🎁" not in text:
                     self.assertTrue(any(min(p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF) > 240 for p in buf))
 
+    def test_oversized_and_many_line_inputs_stay_in_bounds(self):
+        # Chat text is untrusted and the layer runs inside the game: huge input must render, not crash.
+        for text in ("x" * 1_000_000, "\n" * 100_000 + "x", "🎁" * 50_000, "a\n" * 5000):
+            buf = (C.c_uint32 * (W * H))()
+            self.dll.livechatxr_render_test(text.encode(), buf)
+        vbuf = (C.c_uint32 * (1024 * 96))()
+        self.dll.livechatxr_viewers_test(("tiktok 1\n" * 10_000).encode(), vbuf)
+        self.assertTrue(any(vbuf))
+
     def test_viewer_box_hugs_the_right_and_draws_platform_logos(self):
         VW, VH = 1024, 96
         rgb = lambda p: (p & 0xFF, p >> 8 & 0xFF, p >> 16 & 0xFF)

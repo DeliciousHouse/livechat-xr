@@ -51,7 +51,7 @@ shows an answer. Local fake-transport success is not that acceptance.
 
 ## Requirement → runnable proof
 
-Run with Python 3.12 and PyNaCl 1.6.0 (server/test dependency only):
+Run with Python 3.12 and PyNaCl 1.6.2 (server/test dependency only):
 
 `python -m unittest tests.test_network tests.test_discord_delivery -v`
 

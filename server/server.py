@@ -1145,22 +1145,73 @@ def network_totals():
               'E6 visitor measurement unavailable — no threshold passed. A demand tap is not a payment.</p></section>')
 
 
+# Inline scripts/styles are part of the approved pages, so script-src keeps 'unsafe-inline'; the policy's value is the
+# origin allowlist plus framing/base/object/form-action limits. form-action needs discord.com: Chrome applies it to the
+# 303 that /register and the listing "link" action send to Discord's OAuth page.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client "
+       "https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
+       "https://accounts.google.com/gsi/style; font-src https://fonts.gstatic.com; img-src 'self' data: "
+       "https://*.google-analytics.com https://*.googletagmanager.com; connect-src 'self' https://accounts.google.com/gsi/ "
+       "https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; "
+       "frame-src https://accounts.google.com/gsi/; form-action 'self' https://discord.com; base-uri 'none'; "
+       "object-src 'none'; frame-ancestors 'none'")
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000",  # ignored by browsers over plain HTTP (local dev)
+    "Content-Security-Policy": CSP,
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",  # manage links carry the token
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+RATE_LIMIT = (20, 600)  # /register and /recover per client IP per 10 minutes; each one fans out to Discord/TikTok/YouTube/Google
+hits: dict[str, list[float]] = {}
+
+
+def rate_limited(ip: str, now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    limit, window = RATE_LIMIT
+    with lock:
+        if len(hits) > 10000:  # ponytail: drop idle IPs wholesale; a real store would expire per key
+            for k in [k for k, v in hits.items() if v[-1] < now - window]:
+                hits.pop(k)
+        recent = [t for t in hits.get(ip, ()) if t > now - window]
+        if len(recent) >= limit:
+            hits[ip] = recent
+            return True
+        hits[ip] = recent + [now]
+    return False
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "LiveChatXR"
+    timeout = 30  # a client that stalls headers or body must not hold a server thread forever
+
+    def version_string(self) -> str:
+        return self.server_version  # no Python version banner
+
+    def end_headers(self) -> None:
+        # Every response path (send(), /go/, /discord/interactions, stdlib send_error) passes through here.
+        for name, value in SECURITY_HEADERS.items():
+            self.send_header(name, value)
+        super().end_headers()
+
+    def client_ip(self) -> str:
+        # Caddy appends the real client as the last X-Forwarded-For entry; the relay port is bound to the LAN only.
+        forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+        return forwarded or self.client_address[0]
 
     def send(self, code: int, body: bytes, location: str = "", ctype: str = "text/html; charset=utf-8") -> None:
         self.send_response(code)
         if location:
             self.send_header("Location", location)
         self.send_header("Content-Type", ctype)
-        if ctype.startswith("image/"):
-            self.send_header("X-Content-Type-Options", "nosniff")
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
         elif self.path.startswith(("/m/", "/recover", "/network/", "/admin")):
             self.send_header("Cache-Control", "no-store")
+        if code == 429:
+            self.send_header("Retry-After", str(RATE_LIMIT[1]))
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Referrer-Policy", "no-referrer")  # manage links carry the token
         self.end_headers()
         self.wfile.write(body)
 
@@ -1238,7 +1289,6 @@ class Handler(BaseHTTPRequestHandler):
             destination = discovery.resolve_go(opaque) if discovery is not None and "?" not in self.path else None
             self.send_response(302 if destination else 404)
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Referrer-Policy", "no-referrer")
             if destination: self.send_header("Location", destination)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -1262,7 +1312,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 webhook = discord_exchange(q["code"])
             except Exception as e:
-                log.warning("discord oauth: %r", e)
+                log.warning("discord oauth: %s", type(e).__name__)  # never the code or response
                 return self.send(400, home(note("Discord didn't finish connecting. Please try again.", True)))
             return self.register({**entry[1], "webhook": webhook, "via": "webhook"})
         if path == "/privacy":
@@ -1314,6 +1364,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(413, page(note("Too much data.", True)))
         form = {k: v[0].strip() for k, v in parse_qs(self.rfile.read(n).decode("utf-8", "replace")).items()}
         path = self.path.split("?")[0]
+        # Browser form posts are same-origin only (CSRF defence in depth; manage links are capability URLs).
+        if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+            return self.send(403, page(note("Request rejected. Open this page from the LiveChat XR site and try again.", True)))
+        if path in ("/register", "/recover") and self.client_ip() not in ("127.0.0.1", "::1") and rate_limited(self.client_ip()):
+            return self.send(429, page(note("Too many attempts from your network. Wait a few minutes and try again.", True)))
         if m := re.fullmatch(r"/m/([\w-]{20,64})/network", path):
             return self.network_post(m[1], form)
         if path == "/register":
@@ -1512,7 +1567,7 @@ class Handler(BaseHTTPRequestHandler):
                 form["name"], form["email"] = google_identity(form["google"])
                 form["signin"] = "google"
             except Exception as e:
-                log.warning("google sign-in: %r", e)
+                log.warning("google sign-in: %s", type(e).__name__)  # never the ID token
                 err = "Google sign-in didn't go through. Try again, or type your name and email."
         name, email = form.get("name", "")[:60], form.get("email", "").lower()
         if err:
@@ -1594,8 +1649,11 @@ class Handler(BaseHTTPRequestHandler):
                   f"/m/{token}?new={'google' if form.get('signin') == 'google' else 'email'}" + ("&moved=1" if moved_from else ""))
 
     def log_message(self, fmt, *args):  # keep tokens and query strings (admin key, OAuth codes) out of logs
-        if self.path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
-        log.info("%s %s", self.command, re.sub(r"/m/[\w-]+", "/m/…", self.path.split("?")[0]))
+        # A timed-out or malformed request is logged before parse_request sets path/command.
+        path, command = getattr(self, "path", "-"), getattr(self, "command", None) or "-"
+        if path.startswith("/go/"): return  # No redirect click trail or visitor measurement.
+        path = re.sub(r"/m/[\w-]+", "/m/…", path.split("?")[0]).replace("\r", "").replace("\n", "").replace("\t", " ")
+        log.info("%s %s", command, path)  # relay.log is tab/line-separated; the request line is client input
 
 
 def main() -> None:

@@ -102,6 +102,27 @@ it also probes the live container. It does not assert a live streamer when none
 is connected. Hold the timer before emergency manual rollback. Revert through a
 reviewed PR for durable rollback; never force-push or restore live data casually.
 
+## Edge headers (Caddy)
+
+The relay sends its own security headers (see [reference](reference.md#relay-http-interface)). At the Caddy site
+for `livechat.deliciouswines.org`, keep `reverse_proxy` pointed at the existing upstream and add only:
+
+```caddyfile
+reverse_proxy <existing upstream> {
+	header_down -Server
+	header_down Strict-Transport-Security "max-age=31536000"
+}
+request_body {
+	max_size 1MB
+}
+```
+
+Do not add `trusted_proxies` for public clients: Caddy must keep replacing a client's own `X-Forwarded-For`,
+because the relay's rate limit reads its last entry. If Caddy access logging is ever enabled for this site,
+drop the query string from logged URIs, since `/admin?key=` carries the admin credential. Verify with
+`curl -sI https://livechat.deliciouswines.org/` that `Server` shows no Python version and that
+`Content-Security-Policy` and `Strict-Transport-Security` each appear once.
+
 ## Required end-to-end evidence (not replaced by unit tests)
 
 - A draft PR's exact head has green `full-suite`; main protection readback names it.
