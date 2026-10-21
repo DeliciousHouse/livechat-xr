@@ -523,8 +523,8 @@ class Server(unittest.TestCase):
             code, _, body, _ = self.discord(self.ANN, hook=HOOK[:-1] + "x", twitch="another")
             self.assertEqual((code, len(server.regs)), (409, server.REGS_PER_DISCORD_USER))
             self.assertIn("already has 3 relays", body)
-            code, _, body, _ = self.discord(self.ANN, path="/recover")
-            self.assertEqual(code, 200)
+            code, headers, body, _ = self.discord(self.ANN, path="/recover")
+            self.assertEqual((code, headers["Cache-Control"]), (200, "no-store"))  # a page of manage links
             self.assertTrue(all(f"/m/{t}" in body for t in server.regs))
             self.assertEqual(self.discord(dict(self.ANN, id="43"), hook=HOOK[:-1] + "y", twitch="another")[0], 303)
 

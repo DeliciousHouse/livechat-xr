@@ -1210,7 +1210,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
-        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin")):
+        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin", "/discord/callback")):  # callback can list manage links
             self.send_header("Cache-Control", "no-store")
         if code == 429:
             self.send_header("Retry-After", str(RATE_LIMIT[1]))
