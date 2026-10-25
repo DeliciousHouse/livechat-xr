@@ -220,23 +220,23 @@ class Viewer:
             text = re.sub(r'\[(Watch on (?:Twitch|YouTube))\]\(/go/(' + TOKEN + r')\)', watch, text)
             text = re.sub(r'\*\*([^*\n]+)\*\*', r'<strong>\1</strong>', text)
             content = ''.join('<p>' + line + '</p>' for line in text.splitlines())
-            content += '<p>Approved primary audience counts still unknown: ' + str(packet['unknown_primary_count']) + '.</p>'
+            content += '<p>Primary channels with an unknown audience count: ' + str(packet['unknown_primary_count']) + '.</p>'
             content += '<h2>Observation provenance</h2><p>Generated ' + esc(packet['generated_at']) + '</p><ul>'
             for platform, last in packet['polls'].items():
                 content += '<li>' + network.SOURCE_NAMES[platform] + ': last successful poll ' + esc(last or 'unknown') + '</li>'
             content += '</ul>'
             for row in packet['rows']:
                 for c in row['channels']:
-                    content += '<p class="meta">' + esc(row['name']) + ' · ' + network.SOURCE_NAMES[c['platform']] + '<br>Observed ' + utc(c['observed_at']) + '<br>Presence seen ' + utc(c['seen_at']) + '</p>'
+                    content += '<p class="meta">' + esc(row['name']) + ' · ' + network.SOURCE_NAMES[c['platform']] + '<br>Observed ' + utc(c['observed_at']) + '<br>Presence recorded ' + utc(c['seen_at']) + '</p>'
         return ('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
             '<title>Pop1 Live — cache inspection</title><style>'
             ':root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#0f0d16;color:#eceaf4;font:16px/1.55 "Bricolage Grotesque",system-ui,sans-serif}'
             'main{max-width:680px;margin:48px auto;padding:0 22px}h1{font-size:36px;line-height:1.15;margin:0 0 22px}h2{font-size:19px;margin:30px 0 8px}'
             'p{margin:12px 0}section{border-block:1px solid #2a2536;padding:10px 0 22px;overflow-wrap:anywhere}a{color:#b39dff;text-underline-offset:4px}a:hover{color:#eceaf4}'
-            'a:focus-visible{outline:2px solid #8b5cf6;outline-offset:4px}.meta,footer{color:#c9c5d8;font-size:13px;overflow-wrap:anywhere}'
+            'a:focus-visible{outline:2px solid #8b5cf6;outline-offset:4px}.meta,footer{color:#c9c5d8;font-size:16px;overflow-wrap:anywhere}'
             '::selection{background:#7c4dff;color:white}@media(max-width:600px){main{margin:30px auto}}</style>'
             '<main><h1>Pop1 Live<br>Cache inspection</h1><p>Read-only cached observations, not a live population or public-launch approval. '
-            'Watch links are checked against the current runtime projection; file replays cannot redirect.</p><section>' + content + '</section>'
+            'Watch links recheck listing eligibility before redirect; file replays cannot redirect.</p><section>' + content + '</section>'
             '<footer><p>Source revision ' + esc(self.revision) + '<br>Artifact digest ' + esc(self.digest) + '</p></footer></main></html>').encode()
 
 

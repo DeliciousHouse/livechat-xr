@@ -865,13 +865,13 @@ class Network:
             counts, links = [], []
             for c in live:
                 label = SOURCE_NAMES[c["platform"]]
-                counts.append(label + " " + (str(c["viewers"]) if c["viewers"] is not None else "unknown"))
+                counts.append(label + (" viewers: " if inspection else " ") + (str(c["viewers"]) if c["viewers"] is not None else "unknown"))
                 url = self.go_link(c)
                 if url: links.append(f"[Watch on {label}]({url})")
             age = max(0, int((now - r["seen_at"]) // 60))
             rows.append(" · ".join([f"**{name}**"] + counts + links) + (f" · last seen {age} min ago" if age >= 15 else ""))
         prefix = header if inspection else "\n".join(warnings + [header, freshness])
-        footer = "Cached data from Twitch, YouTube · not affiliated" if inspection else FOOTER
+        footer = "Cached source observations · not affiliated" if inspection else FOOTER
         visible = []
         for index, row_text in enumerate(rows):
             overflow = f"+{len(rows) - index} more cached streams" if inspection else f"+{len(rows) - index} more — /live for all"

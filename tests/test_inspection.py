@@ -150,7 +150,7 @@ class Boundary(unittest.TestCase):
             self.assertIn('Cache inspection', page)
             self.assertNotIn('<script>synthetic', page)
             self.assertIn('&lt;', page)
-            self.assertIn('Twitch 2', page)
+            self.assertIn('Twitch viewers: 2', page)
             self.assertNotIn('streams live', page)
             self.assertEqual(headers['Cache-Control'], 'no-store, max-age=0')
             packet = self.viewer.read()
@@ -292,7 +292,7 @@ class Boundary(unittest.TestCase):
         s.record_supplied_channel(self.lid, 'youtube', '@synthetic')
         s.bind_verified_channel(self.lid, 'youtube', '@synthetic', 'private-youtube')
         packet = self.viewer.read()
-        self.assertIn('YouTube unknown', packet['text'])
+        self.assertIn('YouTube viewers: unknown', packet['text'])
         channel = packet['rows'][0]['channels'][1]
         self.assertIsNone(channel['viewers'])
         self.assertEqual((channel['seen_at'], channel['observed_at']), (self.now, self.now))
