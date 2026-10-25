@@ -1716,7 +1716,7 @@ def main() -> None:
     loop.create_task(save_stats_loop())
     discovery = network.Network(DATA, normalise_channel)
     inspector = None
-    if os.environ.get("INSPECTION_PORT"):
+    if os.environ.get("INSPECTION_PORT") or os.environ.get("INSPECTION_SOCKET"):
         import inspection
         inspector = inspection.configured_runtime(discovery, os.environ)
     loop.create_task(discovery.start())

@@ -14,6 +14,8 @@ import os
 import re
 import sqlite3
 import stat
+import socket
+import socketserver
 import sys
 import threading
 import time
@@ -176,14 +178,26 @@ def validate(body, expected_revision, expected_digest, now=None):
     return p
 
 
+class LocalConnection(http.client.HTTPConnection):
+    def __init__(self, path):
+        super().__init__('localhost', timeout=2)
+        self.path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(str(self.path))
+
+
 class Viewer:
-    def __init__(self, source_revision, digest, *, upstream_port=None, input_file=None):
+    def __init__(self, source_revision, digest, *, upstream_port=None, input_file=None, socket_path=None):
         self.revision = revision(source_revision)
         if not re.fullmatch(r'[0-9a-f]{64}', digest): raise ValueError('artifact digest required')
-        if (upstream_port is None) == (input_file is None): raise ValueError('choose one input')
+        if sum(v is not None for v in (upstream_port, input_file, socket_path)) != 1: raise ValueError('choose one input')
         if digest != source_digest(): raise ValueError('viewer artifact mismatch')
         self.digest, self.upstream_port = digest, upstream_port
         self.input_file = Path(input_file) if input_file is not None else None
+        self.socket_path = Path(socket_path) if socket_path is not None else None
 
     def read(self):
         if self.input_file is not None:
@@ -195,7 +209,7 @@ class Viewer:
                 body = stream.read(MAX_BYTES + 1)
         else:
             # Fixed loopback peer/path, no proxy environment, redirects or arbitrary URL input.
-            connection = http.client.HTTPConnection('127.0.0.1', self.upstream_port, timeout=2)
+            connection = LocalConnection(self.socket_path) if self.socket_path is not None else http.client.HTTPConnection('127.0.0.1', self.upstream_port, timeout=2)
             try:
                 connection.request('GET', '/projection')
                 response = connection.getresponse()
@@ -240,7 +254,7 @@ class Viewer:
             '<footer><p>Source revision ' + esc(self.revision) + '<br>Artifact digest ' + esc(self.digest) + '</p></footer></main></html>').encode()
 
 
-def listener(port, *, projection=None, viewer=None):
+def listener(port, *, projection=None, viewer=None, socket_path=None):
     if (projection is None) == (viewer is None): raise ValueError('choose one surface')
     class Handler(BaseHTTPRequestHandler):
         def setup(self):
@@ -279,18 +293,43 @@ def listener(port, *, projection=None, viewer=None):
         do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = do_TRACE = do_CONNECT = reject
         def log_message(self, *args): pass  # No visitor/click log.
     # One bounded request at a time; no unbounded thread-per-visitor allocation.
+    if socket_path is not None:
+        path = Path(socket_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        class LocalServer(socketserver.UnixStreamServer):
+            def server_close(self):
+                super().server_close()
+                if hasattr(self, 'identity') and path.exists():
+                    info = path.lstat()
+                    if stat.S_ISSOCK(info.st_mode) and (info.st_dev, info.st_ino) == self.identity:
+                        path.unlink()
+        server = LocalServer(str(path), Handler)  # Existing sockets are never silently replaced.
+        info = path.lstat()
+        server.identity = (info.st_dev, info.st_ino)
+        try:
+            path.chmod(0o666)  # Sanitized public fields only; no credentials or private source endpoint.
+        except OSError:
+            server.server_close()
+            raise
+        return server
     return HTTPServer(('127.0.0.1', port), Handler)
 
 
-def start_runtime(runtime, source_revision, port):
-    server = listener(port, projection=Projection(runtime, source_revision))
+def start_runtime(runtime, source_revision, port=None, *, socket_path=None):
+    server = listener(port, projection=Projection(runtime, source_revision), socket_path=socket_path)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
 
 
 def configured_runtime(runtime, config):
-    if not config.get('INSPECTION_PORT'): return None
-    return start_runtime(runtime, config.get('INSPECTION_REVISION'), int(config['INSPECTION_PORT']))
+    if not config.get('INSPECTION_PORT') and not config.get('INSPECTION_SOCKET'): return None
+    try:
+        if config.get('INSPECTION_SOCKET'):
+            return start_runtime(runtime, config.get('INSPECTION_REVISION'), socket_path=config['INSPECTION_SOCKET'])
+        return start_runtime(runtime, config.get('INSPECTION_REVISION'), int(config['INSPECTION_PORT']))
+    except (OSError, ValueError) as exc:
+        network.log.warning('Inspection unavailable: %s', type(exc).__name__)
+        return None  # Optional inspection failure must not stop hosted chat or change provider holds.
 
 
 def main():
@@ -301,6 +340,7 @@ def main():
     parser.add_argument('--port', type=int, default=8787)
     parser.add_argument('--upstream-port', type=int)
     parser.add_argument('--input', type=Path)
+    parser.add_argument('--socket', type=Path)
     args = parser.parse_args()
     if args.mode == 'digest':
         print(source_digest())
@@ -312,7 +352,7 @@ def main():
         print(encode(Projection(runtime, args.revision).read()).decode())
         return
     server = listener(args.port, viewer=Viewer(args.revision, args.digest,
-        upstream_port=args.upstream_port, input_file=args.input))
+        upstream_port=args.upstream_port, input_file=args.input, socket_path=args.socket))
     print('inspection listening on 127.0.0.1:' + str(server.server_port), flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass

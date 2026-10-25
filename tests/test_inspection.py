@@ -37,6 +37,33 @@ class Export(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_optional_listener_failure_does_not_disable_hosted_runtime(self):
+        import inspection
+        with tempfile.TemporaryDirectory() as data:
+            net = network.Network(data, lambda p, c: c, config={})
+            with mock.patch.object(inspection, 'listener', side_effect=OSError('synthetic bind conflict')):
+                self.assertIsNone(inspection.configured_runtime(net, {'INSPECTION_PORT': '8788', 'INSPECTION_REVISION': REVISION}))
+            self.assertFalse(net.store.path.exists())
+
+    @unittest.skipIf(sys.platform == 'win32', 'Unix socket transport is exercised by Linux CI')
+    def test_sanitized_ipc_crosses_no_database_or_provider_boundary(self):
+        import inspection
+        with tempfile.TemporaryDirectory() as data:
+            net = network.Network(data, lambda p, c: c, config={})
+            net.store.initialize()
+            for p in network.INTERVALS: net.record_poll(p)
+            path = Path(data) / 'inspection' / 'projection.sock'
+            server = inspection.configured_runtime(net, {'INSPECTION_SOCKET': str(path), 'INSPECTION_REVISION': REVISION})
+            self.assertIsNotNone(server)
+            try:
+                viewer = inspection.Viewer(REVISION, inspection.source_digest(), socket_path=path)
+                self.assertEqual(viewer.read()['availability'], 'observed-empty')
+                self.assertEqual([p.name for p in path.parent.iterdir()], ['projection.sock'])
+            finally:
+                server.shutdown()
+                server.server_close()
+            self.assertFalse(path.exists())
+
     def test_export_distinguishes_empty_from_unavailable_without_starting_providers(self):
         import inspection
         with tempfile.TemporaryDirectory() as data:
