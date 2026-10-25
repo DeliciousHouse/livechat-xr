@@ -37,6 +37,16 @@ class Export(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_export_cli_is_utf8_independent_of_console_locale(self):
+        import os
+        import subprocess
+        with tempfile.TemporaryDirectory() as data:
+            env = dict(os.environ, DATA_DIR=str(Path(data) / 'absent'), PYTHONIOENCODING='cp1252')
+            result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'server' / 'inspection.py'), 'export', '--revision', REVISION], env=env, capture_output=True, check=True)
+            packet = json.loads(result.stdout.decode('utf-8'))
+            self.assertEqual(packet['availability'], 'unavailable')
+            self.assertFalse((Path(data) / 'absent').exists())
+
     def test_optional_listener_failure_does_not_disable_hosted_runtime(self):
         import inspection
         with tempfile.TemporaryDirectory() as data:

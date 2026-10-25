@@ -349,7 +349,7 @@ def main():
     if args.mode == 'export':
         # Existing application cache only; never initialize/migrate or call Network.start().
         runtime = network.Network(os.environ.get('DATA_DIR', '/data'), lambda p, c: c, config={})
-        print(encode(Projection(runtime, args.revision).read()).decode())
+        sys.stdout.buffer.write(encode(Projection(runtime, args.revision).read()) + b'\n')
         return
     server = listener(args.port, viewer=Viewer(args.revision, args.digest,
         upstream_port=args.upstream_port, input_file=args.input, socket_path=args.socket))
