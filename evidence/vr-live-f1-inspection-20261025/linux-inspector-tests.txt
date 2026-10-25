@@ -1,0 +1,22 @@
+test_capacity_and_missing_observation_never_become_empty (tests.test_inspection.Boundary.test_capacity_and_missing_observation_never_become_empty) ... ok
+test_file_replay_is_never_current_watch_authority (tests.test_inspection.Boundary.test_file_replay_is_never_current_watch_authority) ... ok
+test_method_path_query_and_body_boundaries (tests.test_inspection.Boundary.test_method_path_query_and_body_boundaries) ... ok
+test_missing_presence_observation_is_unknown_not_observed_empty (tests.test_inspection.Boundary.test_missing_presence_observation_is_unknown_not_observed_empty) ... ok
+test_real_projection_renderer_watch_withdrawal_and_no_provider_access (tests.test_inspection.Boundary.test_real_projection_renderer_watch_withdrawal_and_no_provider_access) ... ok
+test_replay_requires_regular_bounded_file (tests.test_inspection.Boundary.test_replay_requires_regular_bounded_file) ... ok
+test_secondary_unknown_stays_unknown_and_original_timestamps_survive (tests.test_inspection.Boundary.test_secondary_unknown_stays_unknown_and_original_timestamps_survive) ... ok
+test_source_rename_expiry_and_upstream_loss_fail_closed (tests.test_inspection.Boundary.test_source_rename_expiry_and_upstream_loss_fail_closed) ... ok
+test_stale_unreviewed_unknown_optout_and_cache_loss (tests.test_inspection.Boundary.test_stale_unreviewed_unknown_optout_and_cache_loss) ... ok
+test_validation_bounds_provenance_and_offsite_refusal (tests.test_inspection.Boundary.test_validation_bounds_provenance_and_offsite_refusal) ... ok
+test_export_cli_is_utf8_independent_of_console_locale (tests.test_inspection.Export.test_export_cli_is_utf8_independent_of_console_locale) ... ok
+test_export_distinguishes_empty_from_unavailable_without_starting_providers (tests.test_inspection.Export.test_export_distinguishes_empty_from_unavailable_without_starting_providers) ... ok
+test_optional_listener_failure_does_not_disable_hosted_runtime (tests.test_inspection.Export.test_optional_listener_failure_does_not_disable_hosted_runtime) ... Inspection unavailable: OSError
+ok
+test_runtime_export_is_opt_in_without_provider_start (tests.test_inspection.Export.test_runtime_export_is_opt_in_without_provider_start) ... ok
+test_sanitized_ipc_crosses_no_database_or_provider_boundary (tests.test_inspection.Export.test_sanitized_ipc_crosses_no_database_or_provider_boundary) ... ok
+test_store_projection_is_public_and_uses_existing_eligibility (tests.test_inspection.Projection.test_store_projection_is_public_and_uses_existing_eligibility) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 10.283s
+
+OK

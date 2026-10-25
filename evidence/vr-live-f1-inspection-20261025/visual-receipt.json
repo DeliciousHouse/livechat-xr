@@ -1,0 +1,74 @@
+{
+  "synthetic": true,
+  "source_revision": "b083eccae7aaa9b2aaa0017c47ccc99ff6a1d756",
+  "source_digest": "33f61ecc92c0f0f6100e451ec3e69b9a30e50b41fe69388356bbd3040b684e89",
+  "offhost_page_requests": [],
+  "captures": [
+    {
+      "state": "available",
+      "viewport": [
+        1440,
+        900
+      ],
+      "status": 200,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "available-desktop.png"
+    },
+    {
+      "state": "available",
+      "viewport": [
+        390,
+        844
+      ],
+      "status": 200,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "available-mobile.png"
+    },
+    {
+      "state": "observed-empty",
+      "viewport": [
+        1440,
+        900
+      ],
+      "status": 200,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "observed-empty-desktop.png"
+    },
+    {
+      "state": "observed-empty",
+      "viewport": [
+        390,
+        844
+      ],
+      "status": 200,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "observed-empty-mobile.png"
+    },
+    {
+      "state": "unavailable",
+      "viewport": [
+        1440,
+        900
+      ],
+      "status": 503,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "unavailable-desktop.png"
+    },
+    {
+      "state": "unavailable",
+      "viewport": [
+        390,
+        844
+      ],
+      "status": 503,
+      "overflow": 0,
+      "title": "Pop1 Live \u2014 cache inspection",
+      "screenshot": "unavailable-mobile.png"
+    }
+  ]
+}

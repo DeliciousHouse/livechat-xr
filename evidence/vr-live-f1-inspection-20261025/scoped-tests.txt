@@ -1,0 +1,186 @@
+test_discord_request_headers_for_bot_and_followup_webhook (tests.test_network.Collectors.test_discord_request_headers_for_bot_and_followup_webhook) ... ok
+test_http_timeout_including_discord_and_token_refresh (tests.test_network.Collectors.test_http_timeout_including_discord_and_token_refresh) ... ok
+test_rate_limit_headers_and_bad_response_do_not_become_success (tests.test_network.Collectors.test_rate_limit_headers_and_bad_response_do_not_become_success) ... ok
+test_twitch_pages_permanent_ids_and_repeated_cursor (tests.test_network.Collectors.test_twitch_pages_permanent_ids_and_repeated_cursor) ... ok
+test_youtube_pages_live_game_and_unknown_audience (tests.test_network.Collectors.test_youtube_pages_live_game_and_unknown_audience) ... ok
+test_real_signature_ping_and_invalid_payloads (tests.test_network.Interactions.test_real_signature_ping_and_invalid_payloads) ... ok
+test_signed_live_completion_request_and_safe_rejection (tests.test_network.Interactions.test_signed_live_completion_request_and_safe_rejection) ... ok
+test_slow_command_ack_then_followup_and_scope (tests.test_network.Interactions.test_slow_command_ack_then_followup_and_scope) ... ok
+test_docker_copy_layout_import_and_network_version (tests.test_network.Packaging.test_docker_copy_layout_import_and_network_version) ... ok
+test_discord_failure_diagnostics_are_bounded_and_secret_free (tests.test_network.Runtime.test_discord_failure_diagnostics_are_bounded_and_secret_free) ... ok
+test_discord_mentions_retry_and_closed_dm (tests.test_network.Runtime.test_discord_mentions_retry_and_closed_dm) ... ok
+test_discord_operation_labels_and_retry_exhaustion (tests.test_network.Runtime.test_discord_operation_labels_and_retry_exhaustion) ... ok
+test_identity_uses_normalizer_and_official_youtube_not_scrape (tests.test_network.Runtime.test_identity_uses_normalizer_and_official_youtube_not_scrape) ... ok
+test_missing_bot_application_id_never_falls_back_to_oauth (tests.test_network.Runtime.test_missing_bot_application_id_never_falls_back_to_oauth) ... ok
+test_missing_each_config_is_off (tests.test_network.Runtime.test_missing_each_config_is_off) ... ok
+test_real_poll_success_failure_recovery_and_quota_backoff (tests.test_network.Runtime.test_real_poll_success_failure_recovery_and_quota_backoff) ... twitch collector: HTTP 403 quota
+ok
+test_registration_is_private_and_idempotent (tests.test_network.Runtime.test_registration_is_private_and_idempotent) ... ok
+test_retry_wait_rechecks_early_wakeups (tests.test_network.Runtime.test_retry_wait_rechecks_early_wakeups) ... ok
+test_start_stop_and_retry_do_not_refresh_success (tests.test_network.Runtime.test_start_stop_and_retry_do_not_refresh_success) ... ok
+test_stop_joins_inflight_sqlite_work (tests.test_network.Runtime.test_stop_joins_inflight_sqlite_work) ... ok
+test_http_removal_contends_with_collector_transaction (tests.test_network.Storage.test_http_removal_contends_with_collector_transaction) ... ok
+test_removal_and_upsert_both_orders_and_rename (tests.test_network.Storage.test_removal_and_upsert_both_orders_and_rename) ... ok
+test_visibility_requires_consent_review_size_freshness (tests.test_network.Storage.test_visibility_requires_consent_review_size_freshness) ... ok
+test_off_running_chat_healthy_stale_closed_and_auth (tests.test_network_operations.AdminHTTP.test_off_running_chat_healthy_stale_closed_and_auth) ... ok
+test_founder_transport_and_notification_failure_do_not_repeat (tests.test_network_operations.Incidents.test_founder_transport_and_notification_failure_do_not_repeat) ... Founder incident DM: RuntimeError
+Founder incident DM: RuntimeError
+ok
+test_independent_incidents_startup_repeats_and_two_good_polls (tests.test_network_operations.Incidents.test_independent_incidents_startup_repeats_and_two_good_polls) ... ok
+test_runtime_maintenance_and_real_poll_use_same_state (tests.test_network_operations.Incidents.test_runtime_maintenance_and_real_poll_use_same_state) ... youtube collector: HTTP 429
+ok
+test_window_boundaries_dst_and_disabled (tests.test_network_operations.Incidents.test_window_boundaries_dst_and_disabled) ... ok
+test_expired_removal_cannot_reopt_before_maintenance (tests.test_network_operations.Retention.test_expired_removal_cannot_reopt_before_maintenance) ... ok
+test_invalid_supplied_handles_and_duplicate_rebinding_conflicts (tests.test_network_operations.Retention.test_invalid_supplied_handles_and_duplicate_rebinding_conflicts) ... ok
+test_live_end_24h_expiry_peak_unknown_and_restart (tests.test_network_operations.Retention.test_live_end_24h_expiry_peak_unknown_and_restart) ... ok
+test_migration_idempotent_no_provenance_guess_and_legacy_removal (tests.test_network_operations.Retention.test_migration_idempotent_no_provenance_guess_and_legacy_removal) ... ok
+test_provenance_conflicts_removal_reoptin_and_deadline (tests.test_network_operations.Retention.test_provenance_conflicts_removal_reoptin_and_deadline) ... ok
+test_unknown_primary_is_not_secondary_count_or_peak_fallback (tests.test_network_operations.Retention.test_unknown_primary_is_not_secondary_count_or_peak_fallback) ... ok
+test_profile_validation_detachment_and_archive_restore (tests.test_network_surfaces.Profiles.test_profile_validation_detachment_and_archive_restore) ... Executing <Task finished name='Task-170' coro=<Profiles.test_profile_validation_detachment_and_archive_restore() done, defined at C:\Users\bkam\projects\livechat-xr\.worktrees\t_69da3296\tests\test_network_surfaces.py:25> result=None created at C:\Users\bkam\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\runners.py:100> took 0.109 seconds
+ok
+test_v1_migration_transaction_and_repeat (tests.test_network_surfaces.Profiles.test_v1_migration_transaction_and_repeat) ... ok
+test_actual_go_http_noncollection_expiry_restart_removal_and_open_redirects (tests.test_network_surfaces.SignedSurfaces.test_actual_go_http_noncollection_expiry_restart_removal_and_open_redirects) ... ok
+test_real_signed_http_optin_profile_review_live_optout_and_forgery (tests.test_network_surfaces.SignedSurfaces.test_real_signed_http_optin_profile_review_live_optout_and_forgery) ... Discord command: ValueError
+ok
+test_signed_autocomplete_buttons_replay_and_founder_ownership (tests.test_network_surfaces.SignedSurfaces.test_signed_autocomplete_buttons_replay_and_founder_ownership) ... ok
+test_actual_welcome_retry_only_success_clears_closed_dm (tests.test_network_surfaces.Surfaces.test_actual_welcome_retry_only_success_clears_closed_dm) ... ok
+test_alert_edges_consent_closed_dm_and_no_self (tests.test_network_surfaces.Surfaces.test_alert_edges_consent_closed_dm_and_no_self) ... ok
+test_authored_copy_and_external_fields_are_separate (tests.test_network_surfaces.Surfaces.test_authored_copy_and_external_fields_are_separate) ... ok
+test_failed_cross_owner_proof_is_atomic_and_cancelled_proof_cannot_restore (tests.test_network_surfaces.Surfaces.test_failed_cross_owner_proof_is_atomic_and_cancelled_proof_cannot_restore) ... ok
+test_official_proof_apis_no_search_and_exact_identity (tests.test_network_surfaces.Surfaces.test_official_proof_apis_no_search_and_exact_identity) ... ok
+test_optout_races_proof_before_first_owner_commit (tests.test_network_surfaces.Surfaces.test_optout_races_proof_before_first_owner_commit) ... ok
+test_owner_lookup_expires_channels_at_retention_boundary (tests.test_network_surfaces.Surfaces.test_owner_lookup_expires_channels_at_retention_boundary) ... ok
+test_post_schedule_removal_at_two_am_and_reconcile (tests.test_network_surfaces.Surfaces.test_post_schedule_removal_at_two_am_and_reconcile) ... ok
+test_primary_unknown_and_matching_peak_reset_expiry (tests.test_network_surfaces.Surfaces.test_primary_unknown_and_matching_peak_reset_expiry) ... ok
+test_proof_expiry_wrong_identity_replacement_and_cancellation (tests.test_network_surfaces.Surfaces.test_proof_expiry_wrong_identity_replacement_and_cancellation) ... ok
+test_proof_same_reply_minute_checks_success_closed_dm_recovery (tests.test_network_surfaces.Surfaces.test_proof_same_reply_minute_checks_success_closed_dm_recovery) ... ok
+test_restart_reuses_only_own_list_and_stop_pauses (tests.test_network_surfaces.Surfaces.test_restart_reuses_only_own_list_and_stop_pauses) ... ok
+test_rows_states_staleness_and_overflow (tests.test_network_surfaces.Surfaces.test_rows_states_staleness_and_overflow) ... Executing <Task pending name='Task-396' coro=<Surfaces.test_rows_states_staleness_and_overflow() running at C:\Users\bkam\projects\livechat-xr\.worktrees\t_69da3296\tests\test_network_surfaces.py:152> wait_for=<Future pending cb=[shield.<locals>._outer_done_callback() at C:\Users\bkam\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\tasks.py:922, Task.task_wakeup()] created at C:\Users\bkam\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\base_events.py:448> cb=[_run_until_complete_cb() at C:\Users\bkam\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\base_events.py:181] created at C:\Users\bkam\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\Lib\asyncio\runners.py:100> took 1.375 seconds
+ok
+test_running_stopped_and_failure_keep_json_and_stamp_only_success (tests.test_network_backup.NightlyShell.test_running_stopped_and_failure_keep_json_and_stamp_only_success) ... skipped 'nightly shell is exercised by Linux CI'
+test_archive_contents_integrity_chat_only_and_corruption (tests.test_network_backup.Snapshots.test_archive_contents_integrity_chat_only_and_corruption) ... ok
+test_concurrent_online_snapshot_no_platform_bytes_or_shells (tests.test_network_backup.Snapshots.test_concurrent_online_snapshot_no_platform_bytes_or_shells) ... ok
+test_failure_discards_stale_snapshot_and_temp_corruption_rejected (tests.test_network_backup.Snapshots.test_failure_discards_stale_snapshot_and_temp_corruption_rejected) ... ok
+test_foreign_key_violation_fails_snapshot_before_publication (tests.test_network_backup.Snapshots.test_foreign_key_violation_fails_snapshot_before_publication) ... ok
+test_restore_real_runtime_unbound_renamed_handle_and_expiry (tests.test_network_backup.Snapshots.test_restore_real_runtime_unbound_renamed_handle_and_expiry) ... ok
+test_identity_uses_token_then_users_me_and_finite_timeout (tests.test_network_web.Identify.test_identity_uses_token_then_users_me_and_finite_timeout) ... ok
+test_invalid_identity_and_transport_errors_do_not_return_owner (tests.test_network_web.Identify.test_invalid_identity_and_transport_errors_do_not_return_owner) ... ok
+test_callback_withdrawal_during_exchange_and_failed_save (tests.test_network_web.Web.test_callback_withdrawal_during_exchange_and_failed_save) ... ok
+test_checklist_profile_proof_review_and_two_am_removal (tests.test_network_web.Web.test_checklist_profile_proof_review_and_two_am_removal) ... ok
+test_incident_off_first_stale_rows_and_healthy_line (tests.test_network_web.Web.test_incident_off_first_stale_rows_and_healthy_line) ... ok
+test_private_gate_security_state_and_conflict (tests.test_network_web.Web.test_private_gate_security_state_and_conflict) ... ok
+test_public_policy_admin_and_accessible_markup (tests.test_network_web.Web.test_public_policy_admin_and_accessible_markup) ... ok
+test_removal_pending_remote_failure_and_loop_responsiveness (tests.test_network_web.Web.test_removal_pending_remote_failure_and_loop_responsiveness) ... ok
+test_removed_or_reassigned_record_never_grants_another_owner (tests.test_network_web.Web.test_removed_or_reassigned_record_never_grants_another_owner) ... ok
+test_existing_offline_profile_is_accepted (tests.test_server.ChannelCheck.test_existing_offline_profile_is_accepted) ... ok
+test_missing_or_unavailable_profile (tests.test_server.ChannelCheck.test_missing_or_unavailable_profile) ... ok
+test_network_and_bad_json_propagate_for_fail_open_registration (tests.test_server.ChannelCheck.test_network_and_bad_json_propagate_for_fail_open_registration) ... ok
+test_twitch_no_anonymous_check_and_url_host_allowlist (tests.test_server.ChannelCheck.test_twitch_no_anonymous_check_and_url_host_allowlist) ... ok
+test_unknown_shell_private_or_mismatched_response_is_inconclusive (tests.test_server.ChannelCheck.test_unknown_shell_private_or_mismatched_response_is_inconclusive) ... ok
+test_youtube_links_resolve_to_the_owning_channel_handle (tests.test_server.ChannelCheck.test_youtube_links_resolve_to_the_owning_channel_handle) ... youtube link lookup: TimeoutError
+ok
+test_admin_page (tests.test_server.Server.test_admin_page) ... ok
+test_analytics_never_sees_manage_token (tests.test_server.Server.test_analytics_never_sees_manage_token) ... ok
+test_both_platforms_in_one_registration (tests.test_server.Server.test_both_platforms_in_one_registration) ... ok
+test_cap (tests.test_server.Server.test_cap) ... ok
+test_channel_check_outage_accepts_with_note (tests.test_server.Server.test_channel_check_outage_accepts_with_note) ... channel check: TimeoutError
+ok
+test_cross_site_form_posts_are_rejected (tests.test_server.Server.test_cross_site_form_posts_are_rejected) ... ok
+test_discord_cap_applies_when_linking_a_legacy_relay (tests.test_server.Server.test_discord_cap_applies_when_linking_a_legacy_relay) ... ok
+test_discord_one_click_hidden_without_public_url (tests.test_server.Server.test_discord_one_click_hidden_without_public_url) ... ok
+test_discord_person_keeps_only_verified_email (tests.test_server.Server.test_discord_person_keeps_only_verified_email) ... ok
+test_discord_relays_per_account_are_capped (tests.test_server.Server.test_discord_relays_per_account_are_capped) ... ok
+test_discord_sign_up_stores_identity_and_log_in_finds_it (tests.test_server.Server.test_discord_sign_up_stores_identity_and_log_in_finds_it) ... ok
+test_discord_state_is_bound_to_the_starting_browser (tests.test_server.Server.test_discord_state_is_bound_to_the_starting_browser) ... ok
+test_donation_checkout_ignored_and_cancellation_keeps_all_channels (tests.test_server.Server.test_donation_checkout_ignored_and_cancellation_keeps_all_channels) ... ok
+test_fifth_founder_sixth_free_upgrade_and_downgrade (tests.test_server.Server.test_fifth_founder_sixth_free_upgrade_and_downgrade) ... ok
+test_free_slots_then_paid (tests.test_server.Server.test_free_slots_then_paid) ... ok
+test_home_assets (tests.test_server.Server.test_home_assets) ... ok
+test_home_discord_installation_prerequisite (tests.test_server.Server.test_home_discord_installation_prerequisite) ... ok
+test_inconclusive_check_accepts_with_note_then_verified_update_clears_it (tests.test_server.Server.test_inconclusive_check_accepts_with_note_then_verified_update_clears_it) ... ok
+test_log_and_stats_survive_restart (tests.test_server.Server.test_log_and_stats_survive_restart) ... ok
+test_log_drops_query_strings (tests.test_server.Server.test_log_drops_query_strings) ... ok
+test_malformed_request_gets_400_not_a_handler_crash (tests.test_server.Server.test_malformed_request_gets_400_not_a_handler_crash) ... ok
+test_migration_backup_failure_prevents_writes (tests.test_server.Server.test_migration_backup_failure_prevents_writes) ... ok
+test_migration_orders_by_created_with_token_tiebreak (tests.test_server.Server.test_migration_orders_by_created_with_token_tiebreak) ... ok
+test_migration_preserves_four_founders_and_backup (tests.test_server.Server.test_migration_preserves_four_founders_and_backup) ... ok
+test_migration_resumes_after_reservation_write (tests.test_server.Server.test_migration_resumes_after_reservation_write) ... ok
+test_missing_channel_keeps_escaped_form_without_saving (tests.test_server.Server.test_missing_channel_keeps_escaped_form_without_saving) ... ok
+test_normalised_channels_reach_check_and_registration (tests.test_server.Server.test_normalised_channels_reach_check_and_registration) ... ok
+test_posted_webhook_cannot_create_a_registration_with_discord_on (tests.test_server.Server.test_posted_webhook_cannot_create_a_registration_with_discord_on) ... ok
+test_pricing_and_founder_manage_copy (tests.test_server.Server.test_pricing_and_founder_manage_copy) ... ok
+test_privacy_page (tests.test_server.Server.test_privacy_page) ... ok
+test_problem_visible_on_manage_and_admin (tests.test_server.Server.test_problem_visible_on_manage_and_admin) ... ok
+test_register_and_recover_are_rate_limited_per_forwarded_client (tests.test_server.Server.test_register_and_recover_are_rate_limited_per_forwarded_client) ... ok
+test_register_update_delete (tests.test_server.Server.test_register_update_delete) ... ok
+test_rejects_non_discord_urls_and_bad_channels (tests.test_server.Server.test_rejects_non_discord_urls_and_bad_channels) ... ok
+test_security_headers_on_every_response_path (tests.test_server.Server.test_security_headers_on_every_response_path) ... ok
+test_tiktok_missing_error_before_discord_oauth (tests.test_server.Server.test_tiktok_missing_error_before_discord_oauth) ... ok
+test_youtube_registration_from_live_url (tests.test_server.Server.test_youtube_registration_from_live_url) ... ok
+test_view_only_safety_and_owned_cleanup (tests.test_qa_network_fixture.NetworkFixture.test_view_only_safety_and_owned_cleanup) ... ok
+test_cleanup_escalates_and_reaps_exact_children (tests.test_qa_capture.Capture.test_cleanup_escalates_and_reaps_exact_children) ... skipped 'Linux pidfd cleanup boundary'
+test_direct_child_cleanup_has_finite_failure_and_no_reused_pid_signal (tests.test_qa_capture.Capture.test_direct_child_cleanup_has_finite_failure_and_no_reused_pid_signal) ... ok
+test_fixture_startup_exit_and_live_thread_failures_never_copy (tests.test_qa_capture.Capture.test_fixture_startup_exit_and_live_thread_failures_never_copy) ... ok
+test_host_uid_and_owned_inputs_before_tree_inspection (tests.test_qa_capture.Capture.test_host_uid_and_owned_inputs_before_tree_inspection) ... ok
+test_inner_success_and_failure_always_exit_fixture (tests.test_qa_capture.Capture.test_inner_success_and_failure_always_exit_fixture) ... ok
+test_inner_uid1000_requires_existing_isolation_contract (tests.test_qa_capture.Capture.test_inner_uid1000_requires_existing_isolation_contract) ... ok
+test_inner_uid_gate_precedes_output_and_fixture_effects (tests.test_qa_capture.Capture.test_inner_uid_gate_precedes_output_and_fixture_effects) ... ok
+test_inside_attestation_requires_distinct_namespaces_and_clean_env (tests.test_qa_capture.Capture.test_inside_attestation_requires_distinct_namespaces_and_clean_env) ... ok
+test_invalid_scenario_bind_and_cleanup_refuse (tests.test_qa_capture.Capture.test_invalid_scenario_bind_and_cleanup_refuse) ... ok
+test_output_is_exclusive_and_capture_checked_before_copy (tests.test_qa_capture.Capture.test_output_is_exclusive_and_capture_checked_before_copy) ... skipped 'Linux exclusive file boundary'
+test_ownership_remains_namespace_local (tests.test_qa_capture.Capture.test_ownership_remains_namespace_local) ... ok
+test_parent_failure_preserves_static_receipt (tests.test_qa_capture.Capture.test_parent_failure_preserves_static_receipt) ... ok
+test_parent_requires_child_success_and_independent_hash (tests.test_qa_capture.Capture.test_parent_requires_child_success_and_independent_hash) ... ok
+test_pid_identity_is_required_before_signalling (tests.test_qa_capture.Capture.test_pid_identity_is_required_before_signalling) ... ok
+test_plan_hash_and_qa_tree_symlinks_fail_closed (tests.test_qa_capture.Capture.test_plan_hash_and_qa_tree_symlinks_fail_closed) ... skipped 'Linux provenance filesystem'
+test_plan_is_closed_and_home_only (tests.test_qa_capture.Capture.test_plan_is_closed_and_home_only) ... ok
+test_post_launch_setup_failure_reaps_child_and_records_failure (tests.test_qa_capture.Capture.test_post_launch_setup_failure_reaps_child_and_records_failure) ... ok
+test_scenarios_and_browser_arguments (tests.test_qa_capture.Capture.test_scenarios_and_browser_arguments) ... ok
+test_setup_failure_preserves_failed_parent_receipt (tests.test_qa_capture.Capture.test_setup_failure_preserves_failed_parent_receipt) ... ok
+test_stream_drain_limits_both_pipes_and_deadline (tests.test_qa_capture.Capture.test_stream_drain_limits_both_pipes_and_deadline) ... ok
+test_supervisor_caps_and_joins_without_logging (tests.test_qa_capture.Capture.test_supervisor_caps_and_joins_without_logging) ... ok
+test_symlinks_and_modes (tests.test_qa_capture.Capture.test_symlinks_and_modes) ... skipped 'Linux no-follow and ownership boundary'
+test_429_json_retry_after_without_header (tests.test_discord_delivery.Delivery.test_429_json_retry_after_without_header) ... discord post failed: 429
+ok
+test_429_retries_identical_payload_without_loss (tests.test_discord_delivery.Delivery.test_429_retries_identical_payload_without_loss) ... discord post failed: 429
+ok
+test_bursts_and_banner_are_independent (tests.test_discord_delivery.Delivery.test_bursts_and_banner_are_independent) ... ok
+test_hosted_blocking_collector_keeps_each_line_under_half_second (tests.test_discord_delivery.Delivery.test_hosted_blocking_collector_keeps_each_line_under_half_second) ... ok
+test_hosted_crashing_collector_delivers_ten_within_two_seconds (tests.test_discord_delivery.Delivery.test_hosted_crashing_collector_delivers_ten_within_two_seconds) ... twitch collector: RuntimeError
+ok
+test_hosted_missing_each_secret_delivers_ten_within_two_seconds (tests.test_discord_delivery.Delivery.test_hosted_missing_each_secret_delivers_ten_within_two_seconds) ... Discovery off: missing DISCORD_BOT_TOKEN
+Discovery off: missing DISCORD_PUBLIC_KEY
+Discovery off: missing POP1_LIVE_APPLICATION_ID
+Discovery off: missing TWITCH_CLIENT_ID
+Discovery off: missing TWITCH_CLIENT_SECRET
+Discovery off: missing YOUTUBE_API_KEY
+Discovery off: missing POP1_LIVE_GUILD_ID
+Discovery off: missing POP1_LIVE_CHANNEL_ID
+Discovery off: missing POP1_LIVE_FOUNDER_ID
+ok
+test_hosted_mixed_burst_records_all_ten_lines (tests.test_discord_delivery.Delivery.test_hosted_mixed_burst_records_all_ten_lines) ... ok
+test_long_lines_and_tag_never_truncate (tests.test_discord_delivery.Delivery.test_long_lines_and_tag_never_truncate) ... ok
+test_pc_runner_keeps_all_four_discord_lines (tests.test_discord_delivery.Delivery.test_pc_runner_keeps_all_four_discord_lines) ... ok
+test_rate_limit_and_old_backlog_are_counted (tests.test_discord_delivery.Delivery.test_rate_limit_and_old_backlog_are_counted) ... ok
+test_capacity_and_missing_observation_never_become_empty (tests.test_inspection.Boundary.test_capacity_and_missing_observation_never_become_empty) ... ok
+test_file_replay_is_never_current_watch_authority (tests.test_inspection.Boundary.test_file_replay_is_never_current_watch_authority) ... ok
+test_method_path_query_and_body_boundaries (tests.test_inspection.Boundary.test_method_path_query_and_body_boundaries) ... ok
+test_missing_presence_observation_is_unknown_not_observed_empty (tests.test_inspection.Boundary.test_missing_presence_observation_is_unknown_not_observed_empty) ... ok
+test_real_projection_renderer_watch_withdrawal_and_no_provider_access (tests.test_inspection.Boundary.test_real_projection_renderer_watch_withdrawal_and_no_provider_access) ... ok
+test_replay_requires_regular_bounded_file (tests.test_inspection.Boundary.test_replay_requires_regular_bounded_file) ... ok
+test_secondary_unknown_stays_unknown_and_original_timestamps_survive (tests.test_inspection.Boundary.test_secondary_unknown_stays_unknown_and_original_timestamps_survive) ... ok
+test_source_rename_expiry_and_upstream_loss_fail_closed (tests.test_inspection.Boundary.test_source_rename_expiry_and_upstream_loss_fail_closed) ... ok
+test_stale_unreviewed_unknown_optout_and_cache_loss (tests.test_inspection.Boundary.test_stale_unreviewed_unknown_optout_and_cache_loss) ... ok
+test_validation_bounds_provenance_and_offsite_refusal (tests.test_inspection.Boundary.test_validation_bounds_provenance_and_offsite_refusal) ... ok
+test_export_cli_is_utf8_independent_of_console_locale (tests.test_inspection.Export.test_export_cli_is_utf8_independent_of_console_locale) ... ok
+test_export_distinguishes_empty_from_unavailable_without_starting_providers (tests.test_inspection.Export.test_export_distinguishes_empty_from_unavailable_without_starting_providers) ... ok
+test_optional_listener_failure_does_not_disable_hosted_runtime (tests.test_inspection.Export.test_optional_listener_failure_does_not_disable_hosted_runtime) ... Inspection unavailable: OSError
+ok
+test_runtime_export_is_opt_in_without_provider_start (tests.test_inspection.Export.test_runtime_export_is_opt_in_without_provider_start) ... ok
+test_sanitized_ipc_crosses_no_database_or_provider_boundary (tests.test_inspection.Export.test_sanitized_ipc_crosses_no_database_or_provider_boundary) ... skipped 'Unix socket transport is exercised by Linux CI'
+test_store_projection_is_public_and_uses_existing_eligibility (tests.test_inspection.Projection.test_store_projection_is_public_and_uses_existing_eligibility) ... ok
+
+----------------------------------------------------------------------
+Ran 159 tests in 64.276s
+
+OK (skipped=6)
