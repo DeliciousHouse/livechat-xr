@@ -62,6 +62,7 @@ manage-page consent/removal, admin totals, privacy/terms and labelled private de
 | [Architecture](docs/architecture.md) | How the PC layer/app and hosted relay share chat, plus limits and trade-offs |
 | [Development](docs/development.md) | Local environment, tests, empty local relay and verification evidence |
 | [Operations](docs/operations.md) | Dora service map, admin/backup diagnosis and canonical release/deploy runbook ownership |
+| [Cache inspection](docs/inspection.md) | Source-bound sanitized read-only inspector; not live collection or activation |
 | [Roadmap](docs/ROADMAP.md) | Product decisions, phases, gates and backlog |
 | [Contributing](CONTRIBUTING.md) | Scoped changes, draft PRs, tests and safe reports |
 

@@ -1,0 +1,10 @@
+{
+  "source_revision": "b083eccae7aaa9b2aaa0017c47ccc99ff6a1d756",
+  "source_digest": "33f61ecc92c0f0f6100e451ec3e69b9a30e50b41fe69388356bbd3040b684e89",
+  "archive_sha256": "d6b9ff22976b229ac65f468b9355ce40f0101280ceb23bd0a7ed7d3424a07d50",
+  "archive_bytes": 82670,
+  "cli_export_exit": 0,
+  "cli_availability": "unavailable",
+  "cache_created": false,
+  "cache_access": "nonexistent disposable path only, not production"
+}
