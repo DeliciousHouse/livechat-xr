@@ -1715,6 +1715,10 @@ def main() -> None:
         logging.getLogger().addHandler(h)
     loop.create_task(save_stats_loop())
     discovery = network.Network(DATA, normalise_channel)
+    inspector = None
+    if os.environ.get("INSPECTION_PORT"):
+        import inspection
+        inspector = inspection.configured_runtime(discovery, os.environ)
     loop.create_task(discovery.start())
     logging.getLogger("httpx").setLevel(logging.WARNING)  # TikTokLive logs every request URL
     load_registrations()
@@ -1731,6 +1735,9 @@ def main() -> None:
     try:
         loop.run_forever()
     finally:
+        if inspector:
+            inspector.shutdown()
+            inspector.server_close()
         loop.run_until_complete(discovery.stop())
         srv.shutdown()
         srv.server_close()

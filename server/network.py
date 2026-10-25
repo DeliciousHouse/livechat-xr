@@ -135,10 +135,19 @@ class Store:
         self.peaks = {}
 
     @contextlib.contextmanager
-    def connect(self):
-        db = sqlite3.connect(self.path, timeout=10)
+    def connect(self, *, readonly=False, bounded=False):
+        db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro" if readonly else self.path,
+                             uri=readonly, timeout=10)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
+        if bounded:
+            # Inspection fails unavailable rather than scanning an unbounded cache.
+            remaining = 100
+            def budget():
+                nonlocal remaining
+                remaining -= 1
+                return remaining <= 0
+            db.set_progress_handler(budget, 1000)
         try:
             with db:
                 yield db
@@ -320,7 +329,7 @@ class Store:
                        (*fields.values(), listing_id))
 
     def listing(self, listing_id):
-        with self.connect() as db:
+        with self.connect(readonly=True) as db:
             row = db.execute("SELECT * FROM listings WHERE id=?", (listing_id,)).fetchone()
             return dict(row) if row else None
 
@@ -380,19 +389,55 @@ class Store:
             primary = channels[0]
             return self.peak(primary["platform"], primary["platform_id"], now), True
 
-    def live_channels(self, now=None):
+    def inspection_rows(self, now=None):
+        """Public presentation only; no initialization, expiry writes or provider calls."""
+        now = time.time() if now is None else now
+        if not self.path.is_file(): raise ValueError("cache unavailable")
+        with self.guard:
+            with self.connect(readonly=True, bounded=True) as db:
+                missing = db.execute("""SELECT 1 FROM live_streams p JOIN channels c ON c.id=p.channel_id
+                    JOIN listings l ON l.id=c.listing_id
+                    WHERE l.opted_in=1 AND l.review_status='reviewed' AND c.verified=1 AND p.live=1
+                    AND (p.seen_at IS NULL OR p.seen_at<=0 OR p.seen_at>? OR
+                         c.observed_at IS NULL OR c.observed_at<=0 OR c.observed_at>?) LIMIT 1""", (now, now)).fetchone()
+                if missing: raise ValueError("observation unavailable")
+            channels = self.live_channels(now, limit=201)
+            if len(channels) > 200: raise ValueError("inspection capacity exceeded")
+            primary = self.discovery(now, limit=201)
+            rows = []
+            for r in primary:
+                profile = self.profile(r["listing_id"])
+                if not profile or not profile["opted_in"] or profile["review_status"] != "reviewed": continue
+                public = []
+                for c in channels:
+                    if c["listing_id"] != r["listing_id"] or c["game"] != GAME: continue
+                    if any(not isinstance(c[k], (int, float)) or not math.isfinite(c[k])
+                           or not 0 < c[k] <= now for k in ("seen_at", "observed_at")):
+                        raise ValueError("observation unavailable")
+                    if now - c["observed_at"] >= 86400: raise ValueError("expired channel observation")
+                    destination = safe_destination("https://www.twitch.tv/" + c["handle"]
+                        if c["platform"] == "twitch" else "https://www.youtube.com/watch?v=" + c["stream_id"])
+                    if not destination: raise ValueError("unsafe source destination")
+                    public.append({"platform": c["platform"], "viewers": c["viewers"],
+                        "seen_at": c["seen_at"], "observed_at": c["observed_at"], "destination": destination})
+                if public: rows.append({"name": profile["ign"] or r["handle"], "channels": public})
+            first = {}
+            for c in channels: first.setdefault(c["listing_id"], c)
+            return {"rows": rows, "unknown_primary_count": sum(c["viewers"] is None for c in first.values())}
+
+    def live_channels(self, now=None, *, limit=None):
         """Verified, consenting live channels with raw per-platform counts (including None)."""
         now = time.time() if now is None else now
-        with self.connect() as db:
+        with self.connect(readonly=True, bounded=limit is not None) as db:
             return [dict(r) for r in db.execute("""SELECT c.*, p.title,p.viewers,p.stream_id,p.seen_at,p.game
                 FROM channels c JOIN listings l ON l.id=c.listing_id JOIN live_streams p ON p.channel_id=c.id
                 WHERE l.opted_in=1 AND l.review_status='reviewed' AND c.verified=1 AND p.live=1
-                AND p.seen_at>? ORDER BY c.listing_id,c.platform,c.id""", (now - 1800,))]
+                AND p.seen_at>? ORDER BY c.listing_id,c.platform,c.id LIMIT ?""", (now - 1800, -1 if limit is None else limit))]
 
-    def discovery(self, now=None):
+    def discovery(self, now=None, *, limit=None):
         # Twitch sorts before YouTube. Choose live primary BEFORE examining its count.
         primary = {}
-        for row in self.live_channels(now): primary.setdefault(row["listing_id"], row)
+        for row in self.live_channels(now, limit=limit): primary.setdefault(row["listing_id"], row)
         return sorted((r for r in primary.values() if r["game"] == GAME and r["viewers"] is not None
                        and 0 <= r["viewers"] <= 10), key=lambda r: (r["viewers"], r["id"]))
 
@@ -771,21 +816,21 @@ class Network:
                 self.go[opaque]["expires"] = min(now + 86400, channel["seen_at"] + 1800)
         return self.config.get("PUBLIC_URL", "https://livechat.deliciouswines.org").rstrip("/") + "/go/" + opaque
 
-    def resolve_go(self, opaque_id):
+    def resolve_go(self, opaque_id, *, limit=None):
         if not self.enabled or not isinstance(opaque_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{22}", opaque_id): return None
         with self.guard:
             entry = self.go.get(opaque_id)
             if not entry or entry["expires"] <= time.time(): return None
             lid, platform, stream, destination = entry["key"]
         # Recheck durable consent and current live state even if removal came through a future HTTP caller.
-        for c in self.store.live_channels():
+        for c in self.store.live_channels(limit=limit):
             if (c["listing_id"], c["platform"], c["stream_id"]) == (lid, platform, stream):
                 expected = ("https://www.twitch.tv/" + c["handle"] if platform == "twitch"
                             else "https://www.youtube.com/watch?v=" + c["stream_id"])
                 if expected == destination: return safe_destination(destination)
         return None
 
-    async def render_live(self, now=None, *, scheduled=False):
+    async def render_live(self, now=None, *, scheduled=False, inspection=False):
         now = time.time() if now is None else now
         state = self.snapshot()
         if not state["enabled"]: return authored("Pop1 Live is paused — back soon.")
@@ -794,17 +839,21 @@ class Network:
             start = int(local.replace(hour=18, minute=0, second=0, microsecond=0).timestamp())
             end = int(local.replace(hour=23, minute=0, second=0, microsecond=0).timestamp())
             return authored(f"The list updates <t:{start}:t>–<t:{end}:t> each night (your time). /live works anytime.")
-        primary = await self.offload(self.store.discovery, now)
-        channels = await self.offload(self.store.live_channels, now)
+        primary = await self.offload(self.store.discovery, now, **({"limit": 201} if inspection else {}))
+        channels = await self.offload(self.store.live_channels, now, **({"limit": 201} if inspection else {}))
         stamps = [int(s["last_success"]) for s in state["sources"].values() if s["last_success"]]
         stamp = min(stamps) if stamps else int(self.started_at)
         warnings = [f'⚠ {SOURCE_NAMES[p]} streams delayed since <t:{int(s["incident_since"] or self.started_at)}:R> · others current'
                     for p, s in state["sources"].items() if s["delayed"]]
         if len(warnings) == len(INTERVALS):
             warnings = [f'⚠ Live data delayed since <t:{stamp}:R> — /live may be out of date too']
+        if inspection:
+            warnings = []  # The inspector carries exact poll/observation provenance separately.
         if not primary:
+            if inspection: return authored("No eligible small streams in the observed cache.")
             return authored("\n".join(warnings + [f"No small Pop1 streams live right now · updated <t:{stamp}:R>. Going live? /optin to be listed."]))
-        header = f"**Pop1 Live** · {len(primary)} small streams live · updated <t:{stamp}:R>"
+        header = (f"**Pop1 Live** · {len(primary)} cached small streams" if inspection else
+                  f"**Pop1 Live** · {len(primary)} small streams live · updated <t:{stamp}:R>")
         freshness = " · ".join(f'{SOURCE_NAMES[p]} updated <t:{int(s["last_success"])}:R>' if s["last_success"]
                                else f'{SOURCE_NAMES[p]} waiting for a successful poll' for p, s in state["sources"].items())
         rows = []
@@ -821,15 +870,16 @@ class Network:
                 if url: links.append(f"[Watch on {label}]({url})")
             age = max(0, int((now - r["seen_at"]) // 60))
             rows.append(" · ".join([f"**{name}**"] + counts + links) + (f" · last seen {age} min ago" if age >= 15 else ""))
-        prefix = "\n".join(warnings + [header, freshness])
+        prefix = header if inspection else "\n".join(warnings + [header, freshness])
+        footer = "Cached data from Twitch, YouTube · not affiliated" if inspection else FOOTER
         visible = []
         for index, row_text in enumerate(rows):
-            overflow = f"+{len(rows) - index} more — /live for all"
-            if len("\n".join([prefix] + visible + [row_text, overflow, FOOTER]).encode("utf-16-le")) // 2 > 2000:
+            overflow = f"+{len(rows) - index} more cached streams" if inspection else f"+{len(rows) - index} more — /live for all"
+            if len("\n".join([prefix] + visible + [row_text, overflow, footer]).encode("utf-16-le")) // 2 > 2000:
                 visible.append(overflow)
                 break
             visible.append(row_text)
-        return authored("\n".join([prefix] + visible + [FOOTER]))
+        return authored("\n".join([prefix] + visible + [footer]))
 
     async def locate_list(self):
         if self.list_checked: return
