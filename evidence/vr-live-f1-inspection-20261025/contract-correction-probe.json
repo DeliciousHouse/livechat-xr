@@ -1,0 +1,36 @@
+{
+  "evidence_kind": "synthetic real SQLite and loopback HTTP; not production",
+  "runtime_source_digest": "33f61ecc92c0f0f6100e451ec3e69b9a30e50b41fe69388356bbd3040b684e89",
+  "fixture_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "row_keys": [
+    "channels",
+    "name"
+  ],
+  "channel_keys": [
+    "destination",
+    "observed_at",
+    "platform",
+    "seen_at",
+    "viewers"
+  ],
+  "poll_keys": [
+    "twitch",
+    "youtube"
+  ],
+  "live_status": 200,
+  "live_header_names": [
+    "Cache-Control",
+    "Content-Length",
+    "Content-Security-Policy",
+    "Content-Type",
+    "Date",
+    "Referrer-Policy",
+    "Server",
+    "X-Content-Type-Options"
+  ],
+  "cache_control": "no-store, max-age=0",
+  "footer_revision_present": true,
+  "footer_digest_present": true,
+  "eligibility_string_displayed": false,
+  "unknown_well_formed_token_status": 410
+}

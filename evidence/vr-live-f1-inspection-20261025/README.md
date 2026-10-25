@@ -17,6 +17,12 @@ Vision findings led to explicit cache/not-live labels, distinct cached creator v
 
 Ship checklist: Pass 1 covered data/query boundaries, Store locking/current revalidation, input/escaping/destination trust, method/path guards and CI gate integrity. Pass 2 covered async boundary, field/schema parity, canonical timestamps/unknowns, bounded work and packaging. Fixed missing-observation zero semantics, optional-listener continuity, bridged-container sanitized IPC, and locale-dependent CLI output, with regression tests. Final code tests reran after fixes. Performance/scale and kernel/network sandbox enforcement remain unmeasured until Dora host execution.
 
+## Contract correction (t_bfbbb51d)
+
+The original runbook overstated the implemented schema and HTTP provenance surface. `docs/inspection.md` now matches actual row/channel keys, Twitch/YouTube poll keys, Unix-second observation fields and distinct age limits. Source binding is in the `/live` footer, not provenance response headers; the fixed eligibility string is validated in the projection, not displayed by the page. Well-formed unknown Watch tokens return 410; malformed paths return 404. No runtime source bytes, bundled artifact, privacy filter or redirect behavior changed.
+
+`contract-correction-probe.json` records a fresh synthetic real-Store/loopback-HTTP probe of those claims. The new `Boundary.test_documented_projection_fields_match_real_boundary` failed against the old runbook and passed after correction. Windows `python -m unittest tests.test_inspection -v`: 17 tests run, 1 Unix-only skip, exit 0 (system Python 3.14). Earlier test/visual receipts above and the bundled tests remain historical, not receipts for this added check. Runtime digest recomputed unchanged. No new external or production acceptance is claimed.
+
 ## Handoff / limits
 
 `docs/inspection.md` is the versioned field/schema, expiry/withdrawal, export/start, process/bind, GET-only proxy and rollback contract. Dora E t_c16887ba owns host operations; Q owns its narrow proxy/controller and Google/public-activation disposition. Canonical review intake owns the sole review identity and merge; dev-eng did not deploy or self-merge. Required exact-head CI/reviewer receipts are delivered on the card after publication, not invented here.

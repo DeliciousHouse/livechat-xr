@@ -205,6 +205,17 @@ class Boundary(unittest.TestCase):
             self.assertFalse(self.net.enabled)
         self.assertTrue(attempts)
 
+    def test_documented_projection_fields_match_real_boundary(self):
+        import re
+        doc = (Path(__file__).resolve().parents[1] / 'docs' / 'inspection.md').read_text(encoding='utf-8')
+        packet = self.viewer.read()
+        for label, actual in (('Each row', packet['rows'][0]), ('Each channel', packet['rows'][0]['channels'][0])):
+            fields = re.search(label + r' has only ([^.;]+)[.;]', doc, re.IGNORECASE)
+            if fields is None: self.fail('missing documented fields: ' + label)
+            self.assertEqual(set(re.findall(r'`(\w+)`', fields.group(1))), set(actual))
+        self.assertEqual(set(packet['polls']), {'twitch', 'youtube'})
+        self.assertEqual(self.request(path='/go/' + 'a' * 22)[0], 410)
+
     def test_method_path_query_and_body_boundaries(self):
         for path in ('/', '/admin', '/projection', '/live?x=1', '/live/', '/go/' + 'a' * 22 + '?url=https://evil.invalid',
                      '/%6cive', '//live', '/oauth', '/register', '/go/short'):
