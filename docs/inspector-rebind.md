@@ -202,6 +202,16 @@ are replaced with the pre-transaction marker bytes or absence. A completed outer
 commit is not automatically undone: `recover` refuses it; `status` revalidates it.
 After commit, rollback is a separate operator disposition, not blind replay.
 
+Both explicit recovery and native auto-rollback route candidate removal through
+the same guard. After validating the candidate identity, it requests a bounded
+30-second Docker stop so the relay can close its inspector and unlink only its
+owned socket inode. It reinspects the full candidate identity and requires a
+stopped, unpaused container with exit code zero before a **non-forced** removal.
+A stop error, forced kill, failed cleanup or changed identity leaves recovery
+unfinished: retain the candidate and journals and inspect before further action.
+There is no forced-delete fallback or host-side socket unlink. A replacement
+socket inode remains untouched; a failed restored bind must not count as recovery.
+
 If the timer wins the native lock after a crash, or another operator changes
 identities/config/controller records, recovery refuses unknown outcomes rather
 than overwriting a new owner. In particular the unchanged timer cannot understand

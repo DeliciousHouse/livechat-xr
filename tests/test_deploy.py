@@ -167,6 +167,8 @@ class RebindSocketLifecycle(unittest.TestCase):
         self.by_id = {}
         self.start_errors = []
         self.exits = {}
+        self.force_stop = False
+        self.cleanup_failure = False
 
         def cleanup():
             for process in self.processes:
@@ -183,6 +185,8 @@ sys.path[:0] = [str(Path(sys.argv[1]) / 'server'), str(Path(sys.argv[1]) / 'app'
 import inspection
 server = inspection.listener(None, projection=object(), socket_path=sys.argv[2])
 def stop(*_):
+    if sys.argv[3] == 'fail':
+        raise OSError('fixture cleanup failure')
     server.server_close()
     raise SystemExit(0)
 signal.signal(signal.SIGTERM, stop)
@@ -190,7 +194,8 @@ print('READY', flush=True)
 while True:
     signal.pause()
 '''
-            process = subprocess.Popen([sys.executable, '-B', '-c', program, str(ROOT), str(self.socket)],
+            process = subprocess.Popen([sys.executable, '-B', '-c', program, str(ROOT), str(self.socket),
+                                        'fail' if self.cleanup_failure else 'clean'],
                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.processes.append(process)
             assert process.stdout is not None
@@ -214,13 +219,14 @@ while True:
             if args[:2] in (('docker', 'rm'), ('docker', 'stop')) and identity in self.by_id:
                 process = self.by_id[identity]
                 if process.poll() is None:
-                    if args[:2] == ('docker', 'rm') and '-f' in args:
+                    if self.force_stop or args[:2] == ('docker', 'rm') and '-f' in args:
                         process.kill()  # docker rm -f bypasses the product's server_close.
                     else:
                         process.send_signal(signal.SIGTERM)
                 process.communicate(timeout=10)
                 self.exits[identity] = process.returncode
-                self.case.find(identity)['State'].update(Running=False, ExitCode=process.returncode)
+                code = process.returncode if process.returncode >= 0 else 128 - process.returncode
+                self.case.find(identity)['State'].update(Running=False, ExitCode=code)
             if args[:2] == ('docker', 'start'):
                 start(identity)  # A stale pathname must really fail with EADDRINUSE.
             return self.case.command(*args, **kwargs)
@@ -254,6 +260,67 @@ while True:
         self.assertFalse((self.case.state / 'transaction.json').exists())
         self.assertEqual(self.case.run_cli('recover'), 0, self.case.output)
         self.case.assert_restored()
+
+
+    def assert_shutdown_refused(self, native):
+        before = len(self.case.calls)
+        if native:
+            with mock.patch.object(self.native, 'wait_healthy', side_effect=RuntimeError('fixture-health-failure')):
+                self.assertEqual(self.case.run_cli('apply'), 1)
+            self.assertTrue((self.case.state / 'transaction.json').exists())
+        else:
+            with mock.patch.object(self.rebind, 'exporter', side_effect=self.rebind.Refused('fixture-acceptance-failure')):
+                self.assertEqual(self.case.run_cli('apply'), 1)
+            self.assertEqual(self.case.run_cli('recover'), 1)
+            self.assertIn('candidate-shutdown-incomplete', self.case.output)
+        self.assertFalse(any(c[:2] in (('docker', 'rm'), ('docker', 'start')) for c in self.case.calls[before:]))
+        self.assertIsNotNone(self.case.find('c' * 64))
+        self.assertIsNotNone(self.case.find(self.rebind.OLD))
+        self.assertEqual(self.socket.stat().st_ino, self.candidate_inode)
+        self.assertIsNotNone(self.candidate_process.poll())
+        journal = json.loads((self.case.state / self.rebind.JOURNAL).read_bytes())
+        self.assertEqual(journal['phase'], 'swap-intent' if native else 'recovering')
+
+    def test_explicit_recovery_forced_stop_retains_socket_and_journal(self):
+        self.force_stop = True
+        self.assert_shutdown_refused(native=False)
+
+    def test_native_rollback_forced_stop_retains_socket_and_journal(self):
+        self.force_stop = True
+        self.assert_shutdown_refused(native=True)
+
+    def test_explicit_recovery_cleanup_failure_retains_socket_and_journal(self):
+        self.cleanup_failure = True
+        self.assert_shutdown_refused(native=False)
+
+    def test_native_rollback_cleanup_failure_retains_socket_and_journal(self):
+        self.cleanup_failure = True
+        self.assert_shutdown_refused(native=True)
+
+    def test_recovery_never_unlinks_replacement_socket_inode(self):
+        import socket
+        with mock.patch.object(self.rebind, 'exporter', side_effect=self.rebind.Refused('fixture-acceptance-failure')):
+            self.assertEqual(self.case.run_cli('apply'), 1)
+        self.socket.unlink()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as foreign:
+            foreign.bind(str(self.socket))
+            inode = self.socket.stat().st_ino
+            self.assertEqual(self.case.run_cli('recover'), 1)
+            self.assertEqual(self.candidate_process.returncode, 0)
+            self.assertEqual(self.socket.stat().st_ino, inode)
+            self.assertTrue(self.start_errors, 'restored bind must refuse foreign socket')
+            self.assertEqual(json.loads((self.case.state / self.rebind.JOURNAL).read_bytes())['phase'], 'recovering')
+
+    def test_recovery_identity_drift_never_stops_real_candidate(self):
+        with mock.patch.object(self.rebind, 'exporter', side_effect=self.rebind.Refused('fixture-acceptance-failure')):
+            self.assertEqual(self.case.run_cli('apply'), 1)
+        self.case.find('c' * 64)['Image'] = 'sha256:foreign'
+        before = len(self.case.calls)
+        self.assertEqual(self.case.run_cli('recover'), 1)
+        self.assertIn('candidate-identity-drift', self.case.output)
+        self.assertIsNone(self.candidate_process.poll())
+        self.assertEqual(self.socket.stat().st_ino, self.candidate_inode)
+        self.assertFalse(any(c[:2] in (('docker', 'stop'), ('docker', 'rm'), ('docker', 'start')) for c in self.case.calls[before:]))
 
 
 if __name__ == "__main__":
