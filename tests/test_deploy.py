@@ -169,6 +169,7 @@ class RebindSocketLifecycle(unittest.TestCase):
         self.exits = {}
         self.force_stop = False
         self.cleanup_failure = False
+        self.restore_socket_absent = False
 
         def cleanup():
             for process in self.processes:
@@ -232,6 +233,8 @@ while True:
                 # auto-rollback may already have restored OLD before recover.
                 process = self.by_id.get(identity)
                 if process is None or process.poll() is not None:
+                    # Check cleanup before bind: the filesystem may reuse the inode.
+                    self.restore_socket_absent = not self.socket.exists()
                     start(identity)  # A stale pathname must really fail with EADDRINUSE.
             return self.case.command(*args, **kwargs)
         self.case.stack.enter_context(mock.patch.object(self.native, 'command', side_effect=command))
@@ -241,8 +244,8 @@ while True:
         self.assertEqual(self.case.find(self.native.NAME)['Id'], self.rebind.OLD)
         self.assertIn(self.rebind.OLD, self.by_id, '\n'.join(self.start_errors))
         self.assertIsNone(self.by_id[self.rebind.OLD].poll())
-        self.assertIsNotNone(self.candidate_process.poll())
-        self.assertNotEqual(self.socket.stat().st_ino, self.candidate_inode)
+        self.assertEqual(self.candidate_process.poll(), 0)
+        self.assertTrue(self.restore_socket_absent, 'candidate socket must be unlinked before restore')
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(2)
             client.connect(str(self.socket))
