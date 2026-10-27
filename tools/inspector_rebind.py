@@ -559,6 +559,7 @@ class Transaction:
         require(ENV_FILE.read_bytes() == self.expected_env() and UNIT_FILE.read_bytes() == self.expected_unit(), 'written-binding-drift')
         require(sandbox(self.c) == self.j['bindings']['sandbox'], 'sandbox-drift')
         self.candidate(self.inspect(NAME))
+        self.old_binding(self.inspect(OLD))
         require(self.inspect(OLD)['Name'] == '/' + PREVIOUS, 'rollback-container-drift')
         require(not (STATE / 'transaction.json').exists(), 'pending-native-transaction')
         require((STATE / 'deployed').read_bytes() == REV.encode(), 'native-deployed-drift')

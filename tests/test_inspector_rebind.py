@@ -443,6 +443,15 @@ class Transaction(unittest.TestCase):
             self.assertEqual(self.run_cli('apply'), 1)
         self.assertNotEqual(json.loads((self.state / rebind.JOURNAL).read_bytes())['phase'], 'committed')
 
+    def test_rollback_identity_drift_prevents_commit(self):
+        def drift(*args):
+            self.old['Image'] = 'sha256:foreign'
+            return 'unavailable'
+        with mock.patch.object(rebind, 'exporter', side_effect=drift):
+            self.assertEqual(self.run_cli('apply'), 1)
+        self.assertIn('old-container-identity-drift', self.output)
+        self.assertNotEqual(json.loads((self.state / rebind.JOURNAL).read_bytes())['phase'], 'committed')
+
     def test_success_is_committed_only_after_acceptance(self):
         self.assertEqual(self.run_cli('apply'), 0, self.output)
         self.assertEqual(self.swaps, 1)
