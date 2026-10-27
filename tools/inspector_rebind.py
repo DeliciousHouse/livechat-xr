@@ -487,7 +487,16 @@ class Transaction:
         elif args[:2] == ('docker', 'rm'):
             info = self.inspect(args[-1])
             require(self.j['phase'] in ('recovering', 'swap-intent'), 'remove-outside-recovery')
-            self.candidate(info)
+            identity = self.candidate(info)
+            # Both native rollback and explicit recovery must let server_close
+            # unlink its owned socket. Docker stop may escalate to SIGKILL.
+            if info['State']['Running']:
+                self.raw_command('docker', 'stop', '--time', '30', identity)
+            stopped = self.inspect(identity)
+            self.candidate(stopped)
+            require(not stopped['State']['Running'] and not stopped['State'].get('Paused')
+                    and stopped['State'].get('ExitCode') == 0, 'candidate-shutdown-incomplete; inspect-before-recovery')
+            return self.raw_command('docker', 'rm', identity)
         elif args[:2] == ('docker', 'run'):
             require(self.j['phase'] == 'swap-intent' and self.inspect(NAME, optional=True) is None, 'run-identity-drift')
         elif args[:2] in (('docker', 'start'), ('docker', 'stop'), ('docker', 'unpause')):

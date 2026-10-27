@@ -89,7 +89,7 @@ class Transaction(unittest.TestCase):
     def info(self, identity, name, running):
         return {'Id': identity, 'Name': '/' + name, 'Image': rebind.IMAGE,
                 'Config': {'Env': ['PRIVATE=fixture-do-not-print', 'INSPECTION_REVISION=' + rebind.OLD_REV]},
-                'State': {'Running': running, 'Paused': False},
+                'State': {'Running': running, 'Paused': False, 'ExitCode': 0},
                 'HostConfig': {'NetworkMode': 'livechat-xr', 'RestartPolicy': {'Name': 'unless-stopped'},
                                'PortBindings': {'13300/tcp': [{'HostIp': '192.168.1.240', 'HostPort': '13300'}]}},
                 'Mounts': [{'Name': 'livechat-xr-data', 'Destination': '/data', 'RW': True}]}
@@ -375,6 +375,45 @@ class Transaction(unittest.TestCase):
         self.assertEqual(self.run_cli('recover'), 1)
         self.assertIn('candidate-identity-drift', self.output)
         self.assertFalse(any(c[:2] == ('docker', 'rm') for c in self.calls[before:]))
+
+    def test_candidate_removal_stops_before_nonforced_delete(self):
+        with mock.patch.object(rebind, 'exporter', side_effect=rebind.Refused('exporter-binding')):
+            self.assertEqual(self.run_cli('apply'), 1)
+        before = len(self.calls)
+        self.assertEqual(self.run_cli('recover'), 0, self.output)
+        calls = self.calls[before:]
+        stop = ('docker', 'stop', '--time', '30', 'c' * 64)
+        remove = ('docker', 'rm', 'c' * 64)
+        self.assertIn(stop, calls)
+        self.assertIn(remove, calls)
+        self.assertLess(calls.index(stop), calls.index(remove))
+        self.assertFalse(any(c[:3] == ('docker', 'rm', '-f') for c in calls))
+
+    def test_candidate_stop_failure_never_removes_or_restarts(self):
+        for fault in ('command', 'running', 'forced', 'cleanup', 'identity'):
+            with self.subTest(fault=fault):
+                case = Transaction()
+                case.setUp()
+                try:
+                    with mock.patch.object(rebind, 'exporter', side_effect=rebind.Refused('exporter-binding')):
+                        self.assertEqual(case.run_cli('apply'), 1)
+                    def command(*args, **kwargs):
+                        if args[:2] == ('docker', 'stop') and args[-1] == 'c' * 64:
+                            if fault == 'command': raise RuntimeError('fixture-stop-failed')
+                            c = case.find(args[-1])
+                            c['State'].update(Running=fault == 'running', ExitCode=137 if fault == 'forced' else 1 if fault == 'cleanup' else 0)
+                            if fault == 'identity': c['Image'] = 'sha256:foreign'
+                            return ''
+                        return case.command(*args, **kwargs)
+                    before = len(case.calls)
+                    with mock.patch.object(deploy, 'command', side_effect=command):
+                        self.assertEqual(case.run_cli('recover'), 1, case.output)
+                    self.assertFalse(any(c[:2] in (('docker', 'rm'), ('docker', 'start')) for c in case.calls[before:]))
+                    self.assertIsNotNone(case.find('c' * 64))
+                    self.assertIsNotNone(case.find(rebind.OLD))
+                    self.assertEqual(json.loads((case.state / rebind.JOURNAL).read_bytes())['phase'], 'recovering')
+                finally:
+                    case.doCleanups()
 
     def test_stale_original_cas_refuses_already_rebound_host(self):
         self.env.write_bytes(rebind.revision_line(self.env.read_bytes(), rebind.OLD_REV, rebind.REV))
