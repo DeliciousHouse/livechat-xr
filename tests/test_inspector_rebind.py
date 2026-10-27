@@ -43,7 +43,7 @@ class Transaction(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.state = self.root / 'state'
         self.state.mkdir(mode=0o700)
         self.env = self.root / 'runtime.env'
@@ -502,7 +502,7 @@ class LocalGuards(unittest.TestCase):
             if args[0] == 'cat-file': return entries[int(args[2])][1]
             self.fail('unexpected git command')
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(rebind, 'git', side_effect=git):
-            stage = Path(directory) / rebind.REV
+            stage = Path(directory).resolve() / rebind.REV
             with mock.patch.object(rebind, 'STAGE', stage):
                 rebind.stage_source()
                 rebind.stage_source()
