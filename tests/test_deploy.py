@@ -1,6 +1,7 @@
 """Deployment guards and rollback without Docker, GitHub credentials or live users."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -141,6 +142,118 @@ class Deploy(unittest.TestCase):
             fixture.tearDown()
             fixture.srv.server_close()
             fixture.doCleanups()
+
+
+@unittest.skipUnless(os.name == 'posix', 'real Unix socket/process lifecycle requires Linux')
+class RebindSocketLifecycle(unittest.TestCase):
+    """Fake Docker control, but real isolated exporters and persistent socket inode."""
+    def setUp(self):
+        import select
+        import signal
+        import subprocess
+        import sys
+
+        # Reuse the outer transaction's disposable files and strict container identities.
+        fixture_spec = importlib.util.spec_from_file_location('socket_rebind_fixture', ROOT / 'tests/test_inspector_rebind.py')
+        assert fixture_spec and fixture_spec.loader
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        self.case = fixture.Transaction()
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+        self.rebind, self.native = fixture.rebind, fixture.deploy
+        self.socket = self.case.root / 'projection.sock'
+        self.processes = []
+        self.by_id = {}
+        self.start_errors = []
+        self.exits = {}
+
+        def cleanup():
+            for process in self.processes:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=10)
+        self.addCleanup(cleanup)
+
+        def start(identity):
+            # Use the product listener/server_close, not a dictionary or a socket mock.
+            program = '''import signal, sys
+from pathlib import Path
+sys.path[:0] = [str(Path(sys.argv[1]) / 'server'), str(Path(sys.argv[1]) / 'app')]
+import inspection
+server = inspection.listener(None, projection=object(), socket_path=sys.argv[2])
+def stop(*_):
+    server.server_close()
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+print('READY', flush=True)
+while True:
+    signal.pause()
+'''
+            process = subprocess.Popen([sys.executable, '-B', '-c', program, str(ROOT), str(self.socket)],
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.processes.append(process)
+            assert process.stdout is not None
+            ready, _, _ = select.select([process.stdout], [], [], 15)
+            self.assertTrue(ready, 'exporter readiness deadline exceeded')
+            if process.stdout.readline() != b'READY\n':
+                out, err = process.communicate(timeout=10)
+                self.start_errors.append(err.decode())
+                raise RuntimeError('disposable exporter could not bind: ' + err.decode())
+            self.by_id[identity] = process
+            return process
+        self.start = start
+
+        def command(*args, **kwargs):
+            identity = args[-1]
+            if args[:2] == ('docker', 'run'):
+                result = self.case.command(*args, **kwargs)
+                self.candidate_process = start(result)
+                self.candidate_inode = self.socket.stat().st_ino
+                return result
+            if args[:2] in (('docker', 'rm'), ('docker', 'stop')) and identity in self.by_id:
+                process = self.by_id[identity]
+                if process.poll() is None:
+                    if args[:2] == ('docker', 'rm') and '-f' in args:
+                        process.kill()  # docker rm -f bypasses the product's server_close.
+                    else:
+                        process.send_signal(signal.SIGTERM)
+                process.communicate(timeout=10)
+                self.exits[identity] = process.returncode
+                self.case.find(identity)['State'].update(Running=False, ExitCode=process.returncode)
+            if args[:2] == ('docker', 'start'):
+                start(identity)  # A stale pathname must really fail with EADDRINUSE.
+            return self.case.command(*args, **kwargs)
+        self.case.stack.enter_context(mock.patch.object(self.native, 'command', side_effect=command))
+
+    def assert_exporter_restored(self):
+        import socket
+        self.assertEqual(self.case.find(self.native.NAME)['Id'], self.rebind.OLD)
+        self.assertIn(self.rebind.OLD, self.by_id, '\n'.join(self.start_errors))
+        self.assertIsNone(self.by_id[self.rebind.OLD].poll())
+        self.assertIsNotNone(self.candidate_process.poll())
+        self.assertNotEqual(self.socket.stat().st_ino, self.candidate_inode)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(2)
+            client.connect(str(self.socket))
+
+    def test_explicit_outer_recovery_rebinds_real_socket(self):
+        with mock.patch.object(self.rebind, 'exporter', side_effect=self.rebind.Refused('fixture-acceptance-failure')):
+            self.assertEqual(self.case.run_cli('apply'), 1)
+        self.assertIsNone(self.candidate_process.poll())
+        result = self.case.run_cli('recover')
+        self.assertEqual(result, 0, self.case.output + '\n'.join(self.start_errors))
+        self.assert_exporter_restored()
+        self.case.assert_restored()
+        self.assertEqual(self.case.run_cli('recover'), 0, self.case.output)
+
+    def test_native_auto_rollback_rebinds_real_socket(self):
+        with mock.patch.object(self.native, 'wait_healthy', side_effect=[RuntimeError('fixture-health-failure'), None]):
+            self.assertEqual(self.case.run_cli('apply'), 1)
+        self.assert_exporter_restored()
+        self.assertFalse((self.case.state / 'transaction.json').exists())
+        self.assertEqual(self.case.run_cli('recover'), 0, self.case.output)
+        self.case.assert_restored()
 
 
 if __name__ == "__main__":
