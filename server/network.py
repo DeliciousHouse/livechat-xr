@@ -681,8 +681,12 @@ class Network:
             raise RuntimeError("stopping")
         code, body = request_json(url + "?" + urllib.parse.urlencode(params), headers=headers)
         if code != 200:
-            quota = any(e.get("reason") in ("quotaExceeded", "dailyLimitExceeded")
-                        for e in body.get("error", {}).get("errors", []))
+            body = body if isinstance(body, dict) else {}
+            error = body.get("error")
+            errors = error.get("errors") if isinstance(error, dict) else None
+            quota = isinstance(errors, list) and any(
+                isinstance(e, dict) and isinstance(e.get("reason"), str)
+                and e["reason"] in ("quotaExceeded", "dailyLimitExceeded") for e in errors)
             raise HTTPFailure(code, retry_delay(body.get("retry_after", 0)), quota)
         return body
 
