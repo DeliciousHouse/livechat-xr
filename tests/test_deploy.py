@@ -228,7 +228,11 @@ while True:
                 code = process.returncode if process.returncode >= 0 else 128 - process.returncode
                 self.case.find(identity)['State'].update(Running=False, ExitCode=code)
             if args[:2] == ('docker', 'start'):
-                start(identity)  # A stale pathname must really fail with EADDRINUSE.
+                # Docker start is idempotent for a running container. Native
+                # auto-rollback may already have restored OLD before recover.
+                process = self.by_id.get(identity)
+                if process is None or process.poll() is not None:
+                    start(identity)  # A stale pathname must really fail with EADDRINUSE.
             return self.case.command(*args, **kwargs)
         self.case.stack.enter_context(mock.patch.object(self.native, 'command', side_effect=command))
 

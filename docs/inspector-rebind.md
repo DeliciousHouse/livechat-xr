@@ -240,7 +240,10 @@ before/after outer durability phases, command/native stamp boundaries, interrupt
 during recovery, native auto-rollback, native-journal-cleared acceptance failure,
 marker absence, exact bytes/metadata, staging/drift, collision/new owners,
 controller hash versus reviewed source, process/proxy binding and truthful 503.
-Native flock/xattr checks run on Linux; Windows explicitly skips those two checks
-and mocks only the lock in transaction fixtures. Existing tests and CI policy are
+The deployment suite also runs real disposable Unix exporter processes through
+both rollback paths, including forced-stop and cleanup failures, candidate
+identity drift and a foreign replacement socket inode. These lifecycle cases and
+native flock/xattr checks run on Linux; Windows explicitly skips them and mocks
+only the lock in transaction fixtures. Existing tests and CI policy are
 not weakened. Offline success is **not** Dora execution or real security/cohort
-acceptance. Source rollback is a normal reviewed revert of these three files.
+acceptance. Source rollback is a normal reviewed revert of the wrapper, tests and runbook.
