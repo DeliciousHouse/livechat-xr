@@ -368,6 +368,53 @@ class Collectors(unittest.TestCase):
     def setUp(self):
         self.net = network.Network(Path("unused"), server.normalise_channel, config())
 
+    def test_api_error_envelopes_preserve_status_retry_and_quota(self):
+        # protects: typed status/retry/quota; fails_when: shape exceptions or false quota;
+        # no_claim: synthetic responses establish neither provider health nor incident cause.
+        cases = [
+            (500, {}, 0, False),
+            (500, {"error": {}}, 0, False),
+            (403, {"error": {"errors": []}}, 0, False),
+            (403, {"reason": "quotaExceeded"}, 0, False),
+            (401, {"error": "Unauthorized"}, 0, False),
+            (429, {"error": "Too Many Requests", "retry_after": 30}, 30, False),
+            (500, {"error": None}, 0, False),
+            (503, [], 0, False),
+            (403, {"error": {"errors": [{"reason": "quotaExceeded"}]}}, 0, True),
+            (403, {"error": {"errors": [{"reason": "dailyLimitExceeded"}]}}, 0, True),
+            (403, {"error": {"errors": None}}, 0, False),
+            (500, {"error": {"errors": [None, "quotaExceeded", [], 1, {}]}}, 0, False),
+        ]
+        for body in (None, "quotaExceeded", 1, True):
+            cases.append((503, body, 0, False))
+        for error in ([], 1, True):
+            cases.append((500, {"error": error}, 0, False))
+        for errors in ("quotaExceeded", {"reason": "quotaExceeded"}, 1, True):
+            cases.append((403, {"error": {"errors": errors}}, 0, False))
+        for reason in (None, [], {}, 1, True, "other", "QuotaExceeded"):
+            cases.append((500, {"error": {"errors": [{"reason": reason}]}}, 0, False))
+        cases.append((403, {"error": {"errors": [None, {"reason": "quotaExceeded"}]}}, 0, True))
+        for value, expected in (("30", 30), (-1, 0), (None, 60), ([], 60), ({}, 60),
+                                ("invalid", 60), (float("nan"), 60), (float("inf"), 60)):
+            cases.append((429, {"error": "limited", "retry_after": value}, expected, False))
+        for status, body, delay, quota in cases:
+            with self.subTest(status=status, body=body), \
+                    mock.patch.object(network, "request_json", return_value=(status, body)) as request:
+                with self.assertRaises(network.HTTPFailure) as raised:
+                    self.net.api("https://offline.invalid/example", {})
+                self.assertEqual(raised.exception.status, status)
+                self.assertEqual(raised.exception.retry_after, delay)
+                self.assertTrue(network.math.isfinite(raised.exception.retry_after))
+                self.assertIs(raised.exception.quota, quota)
+                self.assertEqual(str(raised.exception), f"HTTP {status}" + (" quota" if quota else ""))
+                request.assert_called_once_with("https://offline.invalid/example?", headers=None)
+
+    def test_api_success_returns_body_unchanged(self):
+        for body in ({"data": []}, {"error": "ignored", "retry_after": 30}, [], None):
+            with self.subTest(body=body), \
+                    mock.patch.object(network, "request_json", return_value=(200, body)):
+                self.assertIs(self.net.api("https://offline.invalid/example", {}), body)
+
     def test_twitch_pages_permanent_ids_and_repeated_cursor(self):
         item = dict(user_id="42", user_login="NewName", id="live", title="Pop1", viewer_count=2, game_id="game")
         pages = [{"data": [{"id": "game", "name": network.GAME}]},
