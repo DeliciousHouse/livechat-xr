@@ -206,6 +206,227 @@ class Surfaces(unittest.IsolatedAsyncioTestCase):
         await n.surface_tick(evening(hour=2))
         self.assertFalse(n.reconcile)
 
+    def cached_list_transport(self, responses):
+        n = self.net
+        n.list_checked = True
+        n.live_message = ("123", "deleted-list")
+        del n.discord  # Exercise the real typed Discord adapter, not an AsyncMock.
+        self.addCleanup(setattr, n, "discord", mock.AsyncMock())
+        self.enterContext(mock.patch.object(network, "request_json", side_effect=AssertionError("offline only")))
+        return self.enterContext(mock.patch.object(n, "_discord", side_effect=responses))
+
+    async def test_deleted_cached_list_replaced_once_then_patches_new_id(self):
+        """protects=one replacement; fails_when=dead ID retried or duplicate POST;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        self.enroll()
+        n = self.net
+        transport = self.cached_list_transport([(404, {"code": 10008}), (200, {"id": "replacement"}), (200, {})])
+        await n.surface_tick(self.now)
+        self.assertEqual(n.live_message, ("123", "replacement"))
+        self.assertEqual(n.last_post, self.now)
+        await n.surface_tick(self.now + 299)
+        self.assertEqual(transport.call_count, 2)
+        await n.surface_tick(self.now + 300)
+        self.assertEqual([c.args[:2] for c in transport.call_args_list], [
+            ("PATCH", "/channels/123/messages/deleted-list"),
+            ("POST", "/channels/123/messages"),
+            ("PATCH", "/channels/123/messages/replacement")])
+        for call in transport.call_args_list:
+            self.assertEqual(call.args[2]["allowed_mentions"], {"parse": []})
+
+    async def test_replacement_rerenders_after_optout_during_failed_patch(self):
+        """protects=withdrawal before replacement; fails_when=pre-PATCH content reused;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        lid = self.enroll()
+        n = self.net
+        def transport(method, path, payload):
+            if method == "PATCH":
+                self.assertIn("Naiya", payload["content"])
+                n.store.set_listing(lid, opted_in=False)
+                return 404, {"code": 10008}
+            return 200, {"id": "replacement"}
+        wire = self.cached_list_transport(transport)
+        await n.surface_tick(self.now)
+        self.assertNotIn("Naiya", wire.call_args.args[2]["content"])
+        self.assertFalse(n.store.profile(lid)["opted_in"])
+
+    async def test_cached_patch_success_has_no_replacement(self):
+        """protects=successful edit semantics; fails_when=success creates a message;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        wire = self.cached_list_transport([(200, {})])
+        await self.net.surface_tick(self.now)
+        self.assertEqual(wire.call_count, 1)
+        self.assertEqual(wire.call_args.args[:2], ("PATCH", "/channels/123/messages/deleted-list"))
+        self.assertEqual(self.net.live_message, ("123", "deleted-list"))
+        self.assertEqual(self.net.last_post, self.now)
+
+    async def test_nonmissing_patch_failures_keep_target_and_typed_diagnostics(self):
+        """protects=typed failure boundaries; fails_when=other failures POST or lose diagnostics;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        n = self.net
+        wire = self.cached_list_transport([])
+        for status, code in ((404, None), (404, 10003), (404, 50001), (403, 50013), (503, 10008)):
+            with self.subTest(status=status, code=code):
+                wire.reset_mock(side_effect=True)
+                wire.side_effect = [(status, {"code": code})]
+                with self.assertLogs("network", level="WARNING") as logs, self.assertRaises(network.HTTPFailure) as caught:
+                    await n.surface_tick(self.now)
+                exc = caught.exception
+                self.assertEqual((exc.status, exc.operation, exc.discord_code), (status, "edit_message", code))
+                self.assertIn(str(exc), logs.output[0])
+                self.assertEqual(wire.call_count, 1)
+                self.assertEqual(n.live_message, ("123", "deleted-list"))
+                self.assertEqual(n.last_post, 0)
+        failure = urllib.error.URLError("fixture transport failure")
+        wire.reset_mock(side_effect=True)
+        wire.side_effect = failure
+        with self.assertRaises(urllib.error.URLError) as caught: await n.surface_tick(self.now)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(wire.call_count, 1)
+        self.assertEqual(n.live_message, ("123", "deleted-list"))
+        # Even a 10008 on another operation is not this cached PATCH deletion contract.
+        with mock.patch.object(n, "discord", side_effect=network.HTTPFailure(404, operation="edit_original", discord_code=10008)) as discord:
+            with self.assertRaises(network.HTTPFailure): await n.surface_tick(self.now)
+            self.assertEqual(discord.call_count, 1)
+            self.assertEqual(n.live_message, ("123", "deleted-list"))
+
+    async def test_cached_patch_rate_limit_keeps_existing_retries(self):
+        """protects=429 waits and bounded PATCH retries; fails_when=429 becomes deletion;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        wire = self.cached_list_transport([(429, {"retry_after": 17})] * 4)
+        with mock.patch.object(network, "wait_retry", new_callable=mock.AsyncMock) as wait:
+            with self.assertRaises(network.HTTPFailure) as caught: await self.net.surface_tick(self.now)
+            self.assertEqual((caught.exception.status, caught.exception.operation), (429, "edit_message"))
+            self.assertEqual(wait.await_args_list, [mock.call(17)] * 3)
+            self.assertEqual(wire.call_count, 4)
+            self.assertTrue(all(c.args[0] == "PATCH" for c in wire.call_args_list))
+            self.assertEqual(self.net.live_message, ("123", "deleted-list"))
+            wire.reset_mock(side_effect=True)
+            wire.side_effect = [(429, {"retry_after": 9}), (200, {})]
+            wait.reset_mock()
+            await self.net.surface_tick(self.now)
+            wait.assert_awaited_once_with(9)
+            self.assertEqual([c.args[0] for c in wire.call_args_list], ["PATCH", "PATCH"])
+
+    async def test_failed_replacement_throttles_and_stores_only_successful_id(self):
+        """protects=retryable replacement without flooding; fails_when=failed ID retained or POST every tick;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        self.enroll()
+        n = self.net
+        wire = self.cached_list_transport([(404, {"code": 10008}), (503, {"id": "failed-id"}),
+            urllib.error.URLError("fixture transport failure"), (200, {"id": "replacement"}), (200, {})])
+        with self.assertRaises(network.HTTPFailure) as caught: await n.surface_tick(self.now)
+        self.assertEqual((caught.exception.status, caught.exception.operation), (503, "create_message"))
+        self.assertIsNone(n.live_message)
+        self.assertTrue(n.list_checked)
+        self.assertTrue(n.go)
+        self.assertTrue(all(not e["posted"] for e in n.go.values()))
+        for offset in (1, 2, 299): await n.surface_tick(self.now + offset)
+        self.assertEqual(wire.call_count, 2)
+        with self.assertRaises(urllib.error.URLError): await n.surface_tick(self.now + 300)
+        self.assertIsNone(n.live_message)
+        await n.surface_tick(self.now + 599)
+        self.assertEqual(wire.call_count, 3)
+        await n.surface_tick(self.now + 600)
+        self.assertEqual(n.live_message, ("123", "replacement"))
+        self.assertTrue(all(e["posted"] for e in n.go.values()))
+        await n.surface_tick(self.now + 900)
+        self.assertEqual([c.args[0] for c in wire.call_args_list], ["PATCH", "POST", "POST", "POST", "PATCH"])
+        self.assertTrue(wire.call_args.args[1].endswith("/replacement"))
+
+    async def test_deleted_list_recovery_respects_disabled_window_and_throttle(self):
+        """protects=no out-of-window or disabled replacement; fails_when=recovery bypasses schedule/throttle;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        n = self.net
+        wire = self.cached_list_transport([(404, {"code": 10008}), (200, {"id": "replacement"})])
+        n.enabled = False
+        await n.surface_tick(self.now)
+        wire.assert_not_called()
+        n.enabled = True
+        n.last_post = self.now
+        await n.surface_tick(self.now + 299)
+        wire.assert_not_called()
+        n.last_post = 0
+        await n.surface_tick(evening(hour=2))
+        self.assertEqual(wire.call_count, 1)
+        self.assertIn("The list updates", wire.call_args.args[2]["content"])
+        self.assertIsNone(n.live_message)
+        await n.surface_tick(evening(hour=2) + 300)
+        self.assertEqual(wire.call_count, 1)
+        await n.surface_tick(self.now)
+        self.assertEqual(n.live_message, ("123", "replacement"))
+        self.assertEqual(wire.call_count, 2)
+
+    async def test_optout_reconciliation_cannot_revive_deleted_list_content(self):
+        """protects=opt-out and stale reconcile tombstones; fails_when=old target revives creator content;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        lid = self.enroll()
+        n = self.net
+        wire = self.cached_list_transport([(404, {"code": 10008})] * 3 + [(200, {"id": "replacement"}), (200, {})])
+        n.send_dm = mock.AsyncMock(return_value=True)
+        self.assertFalse(await n.remove_listing(lid))
+        self.assertIn(("123", "deleted-list"), n.reconcile)
+        await n.surface_tick(self.now)
+        self.assertEqual(n.live_message, ("123", "replacement"))
+        self.assertNotIn(("123", "deleted-list"), n.reconcile)
+        self.assertFalse(n.store.profile(lid)["opted_in"])
+        self.assertEqual(n.store.discovery(self.now), [])
+        for call in wire.call_args_list: self.assertNotIn("Naiya", call.args[2]["content"])
+        # A late stale reconciliation entry remains a tombstone, never an old list snapshot.
+        n.reconcile[("123", "deleted-list")] = 0
+        await n.surface_tick(self.now + 1)
+        self.assertEqual(wire.call_args.args[2]["content"], "Pop1 Live: this ping is no longer current. /live for the list.")
+        self.assertEqual([c.args[0] for c in wire.call_args_list].count("POST"), 1)
+
+    async def test_concurrent_deleted_list_ticks_create_one_replacement(self):
+        """protects=serialized replacement; fails_when=concurrent ticks duplicate POST;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        wire = self.cached_list_transport([(404, {"code": 10008}), (200, {"id": "replacement"})])
+        await asyncio.gather(self.net.surface_tick(self.now), self.net.surface_tick(self.now))
+        self.assertEqual([c.args[0] for c in wire.call_args_list], ["PATCH", "POST"])
+        self.assertEqual(self.net.live_message, ("123", "replacement"))
+
+    async def test_replacement_post_rate_limit_keeps_waits_and_throttle(self):
+        """protects=bounded create retry and cooldown; fails_when=429 loses wait or floods next tick;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        n = self.net
+        wire = self.cached_list_transport([(404, {"code": 10008})] + [(429, {"retry_after": 23})] * 4)
+        with mock.patch.object(network, "wait_retry", new_callable=mock.AsyncMock) as wait:
+            with self.assertRaises(network.HTTPFailure) as caught: await n.surface_tick(self.now)
+            self.assertEqual((caught.exception.status, caught.exception.operation), (429, "create_message"))
+            self.assertEqual(wait.await_args_list, [mock.call(23)] * 3)
+            self.assertIsNone(n.live_message)
+            await n.surface_tick(self.now + 299)
+            self.assertEqual(wire.call_count, 5)
+            self.assertEqual([c.args[0] for c in wire.call_args_list], ["PATCH"] + ["POST"] * 4)
+            wire.side_effect = [(200, {"id": "replacement"})]
+            await n.surface_tick(self.now + 300)
+            self.assertEqual(n.live_message, ("123", "replacement"))
+
+    async def test_disable_during_missing_patch_does_not_create(self):
+        """protects=disable while awaiting PATCH; fails_when=recovery POST ignores disabled state;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        n = self.net
+        def disable(method, path, payload):
+            n.enabled = False
+            return 404, {"code": 10008}
+        wire = self.cached_list_transport(disable)
+        await n.surface_tick(self.now)
+        self.assertIsNone(n.live_message)
+        self.assertEqual(wire.call_count, 1)
+        self.assertEqual(wire.call_args.args[0], "PATCH")
+
     async def test_alert_edges_consent_closed_dm_and_no_self(self):
         n = self.net
         lid = self.enroll()

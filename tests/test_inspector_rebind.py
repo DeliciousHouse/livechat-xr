@@ -1,5 +1,6 @@
 """Outer rebind command; disposable control files, no host/provider access."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -502,6 +503,17 @@ class Transaction(unittest.TestCase):
 
 
 class LocalGuards(unittest.TestCase):
+    def source_fixture(self):
+        for target in ('subprocess.run', 'socket.socket.connect', 'socket.socket.connect_ex'):
+            self.enterContext(mock.patch(target, side_effect=AssertionError('offline fixture only')))
+        files = {}
+        digest = hashlib.sha256()
+        for name in ('inspection.py', 'network.py', 'backup.py', 'chat.py', 'server.py'):
+            path = ('app/' if name == 'chat.py' else 'server/') + name
+            files[path] = body = (ROOT / path).read_bytes().replace(b'\r\n', b'\n')
+            digest.update(name.encode() + b'\0' + body + b'\0')
+        return files, digest.hexdigest()
+
     def test_controller_hash_and_reviewed_engine_are_independent_checks(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'deploy.py'
@@ -522,9 +534,11 @@ class LocalGuards(unittest.TestCase):
                         rebind.load_controller()
 
     def test_stage_archive_tracks_every_byte_and_refuses_drift(self):
+        """protects=source and staged byte binding; fails_when=wrong digest/drift admitted;
+        no_claim=offline fake transports only, no live/device acceptance.
+        """
         import tarfile
-        files = {name: (ROOT / name).read_bytes().replace(b'\r\n', b'\n') for name in
-                 ('server/inspection.py', 'server/network.py', 'server/backup.py', 'app/chat.py', 'server/server.py')}
+        files, source_digest = self.source_fixture()
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode='w') as tar:
             for name, body in files.items():
@@ -542,7 +556,10 @@ class LocalGuards(unittest.TestCase):
             self.fail('unexpected git command')
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(rebind, 'git', side_effect=git):
             stage = Path(directory).resolve() / rebind.REV
-            with mock.patch.object(rebind, 'STAGE', stage):
+            with mock.patch.object(rebind, 'STAGE', stage), mock.patch.object(rebind, 'DIGEST', source_digest):
+                with mock.patch.object(rebind, 'DIGEST', '0' * 64):
+                    with self.assertRaisesRegex(rebind.Refused, 'stage-source-digest'): rebind.stage_source()
+                self.assertFalse(stage.exists())
                 rebind.stage_source()
                 rebind.stage_source()
                 self.assertEqual((stage / 'server/inspection.py').read_bytes(), files['server/inspection.py'])
@@ -627,7 +644,13 @@ class LocalGuards(unittest.TestCase):
             exporter.assert_called_once_with(rebind.OLD_REV, rebind.DIGEST)
 
     def test_exporter_reuses_actual_inspection_validator(self):
-        with mock.patch.object(rebind, 'STAGE', ROOT):
+        """protects=actual source/packet validator; fails_when=wrong source binding admitted;
+        no_claim=offline fake transports only, no live/device acceptance.
+        """
+        _, source_digest = self.source_fixture()
+        with mock.patch.object(rebind, 'STAGE', ROOT), mock.patch.object(rebind, 'DIGEST', source_digest):
+            with mock.patch.object(rebind, 'DIGEST', '0' * 64):
+                with self.assertRaisesRegex(rebind.Refused, 'inspector-source-digest'): rebind.inspector()
             module = rebind.inspector()
             with tempfile.TemporaryDirectory() as directory:
                 runtime = module.network.Network(Path(directory) / 'absent', lambda p, c: c, config={})
@@ -637,6 +660,8 @@ class LocalGuards(unittest.TestCase):
                     self.assertEqual(rebind.exporter(rebind.REV, rebind.DIGEST), 'unavailable')
                     with self.assertRaisesRegex(ValueError, 'source binding mismatch'):
                         rebind.exporter('b' * 40, rebind.DIGEST)
+                    with self.assertRaisesRegex(ValueError, 'source binding mismatch'):
+                        rebind.exporter(rebind.REV, '0' * 64)
                 self.assertFalse(runtime.store.path.exists())
 
     def test_truthful_503_binding_and_negative_routes(self):

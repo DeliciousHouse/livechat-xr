@@ -48,7 +48,10 @@ new line. This works even with the ask turned off. Details: [reference](docs/ref
 Private Pop1 discovery foundation is opt-in server configuration, not a public launch. It adds
 Twitch/YouTube collectors and signed Discord interactions alongside (not instead of) hosted chat.
 The configured private test guild has signed listing/proof commands; the web listing checklist is
-disabled outside the isolated test harness. Missing discovery configuration leaves chat running unchanged. See the
+disabled outside the isolated test harness. Missing discovery configuration leaves chat running unchanged. The source implementation replaces a
+cached list only after Discord confirms that message is missing, during the normal update window;
+failed creation attempts wait at least five minutes before another attempt. This recovery has offline
+fixture coverage, not live Discord/device acceptance. See the
 [runtime contract and runnable coverage ledger](docs/network-foundation.md) for scope and rollback.
 The [incident, sanitized backup/restore and retention contract](docs/network-operations.md)
 documents the implemented core; host installation and public activation remain separate.
