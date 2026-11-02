@@ -933,14 +933,28 @@ class Network:
             channel = self.config["POP1_LIVE_CHANNEL_ID"]
             await self.locate_list()
             if self.live_message:
-                await self.discord("PATCH", f"/channels/{channel}/messages/{self.live_message[1]}", payload)
-            else:
+                try:
+                    await self.discord("PATCH", f"/channels/{channel}/messages/{self.live_message[1]}", payload)
+                except HTTPFailure as exc:
+                    if (exc.status, exc.operation, exc.discord_code) != (404, "edit_message", 10008): raise
+                    self.reconcile.pop(self.live_message, None)
+                    self.live_message = None
+                    if not self.enabled or not in_window: return
+                    payload = await self.render_live(now, scheduled=True)
+            attempted = now
+            if not self.live_message:
+                if not self.enabled or not in_window: return
+                # Throttle create attempts even when the replacement fails; never retain a failed ID.
+                # Measure from the attempt, not tick start: the awaited PATCH above can spend the
+                # whole cooldown in rate-limit waits before the replacement is ever tried.
+                attempted = max(now, time.time())
+                self.last_post = attempted
                 result = await self.discord("POST", f"/channels/{channel}/messages", payload)
                 self.live_message = (channel, result["id"])
             with self.guard:
                 for opaque, entry in self.go.items():
                     if "/go/" + opaque in payload["content"]: entry["posted"] = True
-            self.last_post = now
+            self.last_post = attempted
 
     async def remove_listing(self, listing_id, *, reject=False):
         listing = await self.offload(self.store.listing, listing_id)
