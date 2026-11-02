@@ -413,6 +413,27 @@ class Surfaces(unittest.IsolatedAsyncioTestCase):
             await n.surface_tick(self.now + 300)
             self.assertEqual(n.live_message, ("123", "replacement"))
 
+    async def test_patch_waits_do_not_consume_the_create_cooldown(self):
+        """protects=cooldown measured from the create attempt; fails_when=PATCH rate-limit waits
+        are charged against it and the next tick re-POSTs;
+        no_claim=offline fake Discord only, no live/device acceptance.
+        """
+        self.enroll()
+        n = self.net
+        wire = self.cached_list_transport([(429, {"retry_after": 200})] * 3
+            + [(404, {"code": 10008}), (503, {"id": "failed-id"})])
+        start = self.now
+        async def advance(delay): self.now += delay  # 429 waits spend real time inside the tick
+        with mock.patch.object(network, "wait_retry", advance):
+            with self.assertRaises(network.HTTPFailure) as caught: await n.surface_tick(start)
+            self.assertEqual((caught.exception.status, caught.exception.operation), (503, "create_message"))
+            self.assertGreater(self.now - start, 300)  # the PATCH alone outlasted the whole cooldown
+            self.assertEqual(n.last_post, self.now)    # cooldown starts at the create attempt, not tick start
+            self.assertIsNone(n.live_message)
+            self.now += 1
+            await n.surface_tick()  # the next maintenance tick must still be throttled
+            self.assertEqual([c.args[0] for c in wire.call_args_list], ["PATCH"] * 4 + ["POST"])
+
     async def test_disable_during_missing_patch_does_not_create(self):
         """protects=disable while awaiting PATCH; fails_when=recovery POST ignores disabled state;
         no_claim=offline fake Discord only, no live/device acceptance.
