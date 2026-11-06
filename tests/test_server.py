@@ -140,6 +140,23 @@ class Server(unittest.TestCase):
             return e.code, e.headers, e.read().decode()
         return r.status, r.headers, r.read().decode()
 
+    def test_download_count_and_owner_exclusion(self):
+        old_key = server.ADMIN_KEY
+        server.ADMIN_KEY = "k" * 32
+        self.addCleanup(setattr, server, "ADMIN_KEY", old_key)
+        with self.assertRaises(urllib.error.HTTPError) as response:
+            self.open(self.base + "/download")
+        self.assertEqual(response.exception.code, 302)
+        self.assertIn("LiveChatXR-Setup-0.3.0.exe", response.exception.headers["Location"])
+        with urllib.request.urlopen(self.base + "/admin?key=" + server.ADMIN_KEY) as response:
+            cookie = response.headers["Set-Cookie"].split(";", 1)[0]
+            self.assertIn("external 1", response.read().decode())
+        request = urllib.request.Request(self.base + "/download", headers={"Cookie": cookie})
+        with self.assertRaises(urllib.error.HTTPError):
+            self.open(request)
+        self.assertEqual(server.download_counts(), {"external": 1, "internal": 1})
+        self.assertEqual(json.loads((server.DATA / "downloads.json").read_text()), server.download_counts())
+
     def test_rejects_non_discord_urls_and_bad_channels(self):
         for hook in ("http://127.0.0.1:8100/api/webhooks/1/x", "https://discord.com.evil.io/api/webhooks/1557050913569378406/" + "a" * 68,
                      "https://discord.com/api/webhooks/123/abc", HOOK + "/../../x"):

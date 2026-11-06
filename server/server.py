@@ -76,6 +76,7 @@ NETWORK_WEB_PRIVATE = False  # Only the isolated test harness enables onboarding
 network_oauth: dict[str, tuple[float, str]] = {}  # Ephemeral identify state -> registration, never saved.
 network_csrf: dict[str, str] = {}  # Per-registration CSRF, never a listing identity or backup field.
 STARTED = time.time()
+download_lock = threading.Lock()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
 
@@ -89,6 +90,23 @@ def write_json(name: str, obj) -> None:
     tmp = DATA / (name + ".tmp")
     tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
     os.replace(tmp, DATA / name)
+
+
+def download_counts(internal=None):
+    with download_lock:
+        path = DATA / "downloads.json"
+        try:
+            counts = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            counts = {"internal": 0, "external": 0}
+        if internal is not None:
+            counts["internal" if internal else "external"] += 1
+            write_json("downloads.json", counts)
+        return counts
+
+
+def owner_cookie():
+    return hmac.new(ADMIN_KEY.encode(), b"livechat-download-owner", hashlib.sha256).hexdigest()
 
 
 def load_log_tail() -> None:
@@ -742,7 +760,7 @@ Stripe billing. Session summaries, logs and historic backups are separate from t
 has not been verified. The prior relay policy stated backup copies roll off within 90 days; the operations record describes 30-day
 server archives, offsite copies and controller rollback archives. Those different scopes are not proof of a single erasure deadline.
 In particular, historic backups are not proved erased within 7 days. We do not claim that active listing deletion erases those archives.</p>
-<h2>Analytics and fonts</h2><p>{ga} Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
+<h2>Analytics and fonts</h2><p>{ga} The Windows installer download link records aggregate internal and external request counts, without visitor identifiers. The owner may mark their browser with an internal-use cookie to exclude their own requests. Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
 no visitor cookies, IP/UA tracking, fingerprinting or click-total proxy. E6 visitor measurement is unavailable.
 Google Fonts supplies this page's font, so your browser contacts Google's servers.
 Discord sign-in sets one short-lived cookie (15 minutes) that ties the sign-in to the browser that started it; it is not used for tracking.</p>
@@ -1123,6 +1141,7 @@ def admin_body() -> str:
             '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}'
             '.admin-table{overflow-x:auto}.admin-table:focus-visible{outline:3px solid var(--focus)}</style>'
             + network_incidents() + '<h1>LiveChat XR admin</h1>' + network_totals() +
+            f'<div class="box">Installer download requests: external {download_counts()["external"]} · internal {download_counts()["internal"]}. This browser is marked internal.</div>' +
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
             f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
@@ -1210,7 +1229,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
-        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin", "/discord/callback")):  # callback can list manage links
+        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin", "/discord/callback", "/download")):  # callback can list manage links
             self.send_header("Cache-Control", "no-store")
         if code == 429:
             self.send_header("Retry-After", str(RATE_LIMIT[1]))
@@ -1348,12 +1367,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/download":
+            try:
+                jar = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+                value = jar.get("lcx_owner")
+                internal = bool(ADMIN_KEY and value and secrets.compare_digest(value.value, owner_cookie()))
+                download_counts(internal)
+            except (http.cookies.CookieError, OSError, ValueError, KeyError, TypeError):
+                log.exception("download count unavailable")
+            # shortcut: pinned to v0.3.0, update this URL when a newer stable installer is released.
+            return self.send(302, b"", location="https://github.com/DeliciousHouse/livechat-xr/releases/download/v0.3.0/LiveChatXR-Setup-0.3.0.exe")
         if path == "/":
             return self.send(200, home())
         if path == "/recover":
             return self.send(200, recovery_page())
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
-            return self.send(200, page(admin_body()))
+            return self.send(200, page(admin_body()), cookie=f"lcx_owner={owner_cookie()}; Path=/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax")
         if path == "/discord/callback":
             return self.discord_callback()
         if path == "/privacy":

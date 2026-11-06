@@ -8,7 +8,7 @@ Read TikTok LIVE, Twitch or YouTube chat while playing VR. Choose the path that 
 
 | Path | How it works | Start here |
 |---|---|---|
-| **Windows PCVR overlay** | A tray app reads chat; an OpenXR layer draws short, head-locked banners in selected D3D11 games | [Install and first run](docs/user-guide.md#pc-first-run) · [Download installer](https://github.com/DeliciousHouse/livechat-xr/releases) |
+| **Windows PCVR overlay** | A tray app reads chat; an OpenXR layer draws short, head-locked banners in selected D3D11 games | [Install and first run](docs/user-guide.md#pc-first-run) · [Download installer](https://livechat.deliciouswines.org/download) |
 | **Quest standalone via Discord** | The hosted relay posts chat to your Discord channel, with display handled by Discord on Quest; no LiveChat XR PC app | [Quest setup and notification test](docs/user-guide.md#quest-first-run) · [Connect relay](https://livechat.deliciouswines.org/) |
 
 **Check compatibility first:** PC requires Windows 10/11 x64, an OpenXR/Direct3D 11 game and administrator rights to install. D3D12 and Vulkan are unsupported. The repo previously recorded the Meta PC version of Population: ONE on Quest 3 via Virtual Desktop as tested; other combinations need testing. Standalone in-game Discord pop-ups and timed five-minute setup remain unverified in newcomer QA. Follow the guide's test checkpoint before relying on chat during a stream.

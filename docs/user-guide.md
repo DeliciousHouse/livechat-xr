@@ -17,7 +17,7 @@ Both accept TikTok LIVE, Twitch and YouTube, in any mix. A Quest connected to a 
 
 ### Step 1: Install the Windows app
 
-Open [GitHub Releases](https://github.com/DeliciousHouse/livechat-xr/releases). Expand **Assets**, download `LiveChatXR-Setup-<version>.exe`, not **Source code**, and run it. Choose a normal release rather than a pre-release unless you want to test it. The installer asks for administrator approval because it registers the VR layer for the machine. Keep the launch option selected at the end.
+Download the [Windows installer](https://livechat.deliciouswines.org/download) and run it. Other versions are available on [GitHub Releases](https://github.com/DeliciousHouse/livechat-xr/releases). The installer asks for administrator approval because it registers the VR layer for the machine. Keep the launch option selected at the end.
 
 The installer is not currently code-signed. If Windows warns, first confirm the download came from the DeliciousHouse release page. See [installer troubleshooting](#troubleshooting) rather than disabling protection.
 
