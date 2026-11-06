@@ -1117,7 +1117,7 @@ def network_incidents() -> str:
 def admin_body() -> str:
     try:
         counts = download_counts()
-        downloads = f'Installer download requests: external {counts["external"]} · internal {counts["internal"]}.'
+        downloads = f'Installer download requests: unmarked (external or unmarked owner) {counts["external"]} · owner-marked {counts["internal"]}.'
     except (OSError, ValueError, KeyError, TypeError):
         downloads = 'Installer download counts unavailable.'
     e = html.escape

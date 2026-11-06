@@ -150,7 +150,7 @@ class Server(unittest.TestCase):
         self.assertIn("LiveChatXR-Setup-0.3.0.exe", response.exception.headers["Location"])
         with urllib.request.urlopen(self.base + "/admin?key=" + server.ADMIN_KEY) as response:
             cookie = response.headers["Set-Cookie"].split(";", 1)[0]
-            self.assertIn("external 1", response.read().decode())
+            self.assertIn("unmarked (external or unmarked owner) 1", response.read().decode())
         request = urllib.request.Request(self.base + "/download", headers={"Cookie": cookie})
         with self.assertRaises(urllib.error.HTTPError):
             self.open(request)
