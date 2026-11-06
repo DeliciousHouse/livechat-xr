@@ -76,6 +76,7 @@ NETWORK_WEB_PRIVATE = False  # Only the isolated test harness enables onboarding
 network_oauth: dict[str, tuple[float, str]] = {}  # Ephemeral identify state -> registration, never saved.
 network_csrf: dict[str, str] = {}  # Per-registration CSRF, never a listing identity or backup field.
 STARTED = time.time()
+download_lock = threading.Lock()
 logbuf: collections.deque = collections.deque(maxlen=300)  # recent log lines for /admin
 
 
@@ -89,6 +90,23 @@ def write_json(name: str, obj) -> None:
     tmp = DATA / (name + ".tmp")
     tmp.write_text(json.dumps(obj, indent=1), encoding="utf-8")
     os.replace(tmp, DATA / name)
+
+
+def download_counts(internal=None):
+    with download_lock:
+        path = DATA / "downloads.json"
+        try:
+            counts = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            counts = {"internal": 0, "external": 0}
+        if internal is not None:
+            counts["internal" if internal else "external"] += 1
+            write_json("downloads.json", counts)
+        return counts
+
+
+def owner_cookie():
+    return hmac.new(ADMIN_KEY.encode(), b"livechat-download-owner", hashlib.sha256).hexdigest()
 
 
 def load_log_tail() -> None:
@@ -643,7 +661,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
 <style>{css}</style>{head}</head><body>
 <header class="site"><a class="brand" href="/"><img src="/brand/header-dark.svg" width="195" height="48" alt="LiveChat XR"></a>
-<nav aria-label="Site"><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
+<nav aria-label="Site"><a href="/download">Windows download</a><a href="https://github.com/DeliciousHouse/livechat-xr">GitHub</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav></header>
 <main>{body}</main></body></html>"""
 
 DISCORD_ICON = ('<svg viewBox="0 0 24 24" width="22" height="22" fill="#fff" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg>')
@@ -742,7 +760,7 @@ Stripe billing. Session summaries, logs and historic backups are separate from t
 has not been verified. The prior relay policy stated backup copies roll off within 90 days; the operations record describes 30-day
 server archives, offsite copies and controller rollback archives. Those different scopes are not proof of a single erasure deadline.
 In particular, historic backups are not proved erased within 7 days. We do not claim that active listing deletion erases those archives.</p>
-<h2>Analytics and fonts</h2><p>{ga} Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
+<h2>Analytics and fonts</h2><p>{ga} The Windows installer download link records aggregate internal and external request counts, without visitor identifiers. The owner may mark their browser with an internal-use cookie to exclude their own requests. Private listing/proof pages and Watch redirects do not collect discovery visitor analytics:
 no visitor cookies, IP/UA tracking, fingerprinting or click-total proxy. E6 visitor measurement is unavailable.
 Google Fonts supplies this page's font, so your browser contacts Google's servers.
 Discord sign-in sets one short-lived cookie (15 minutes) that ties the sign-in to the browser that started it; it is not used for tracking.</p>
@@ -1097,6 +1115,11 @@ def network_incidents() -> str:
 
 
 def admin_body() -> str:
+    try:
+        counts = download_counts()
+        downloads = f'Installer download requests: unmarked (external or unmarked owner) {counts["external"]} · owner-marked {counts["internal"]}.'
+    except (OSError, ValueError, KeyError, TypeError):
+        downloads = 'Installer download counts unavailable.'
     e = html.escape
     live = sum("connected" in status.get(t, "") for t in regs)
     paid = sum(plan(r) == "paid" for r in regs.values())
@@ -1123,6 +1146,7 @@ def admin_body() -> str:
             '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}'
             '.admin-table{overflow-x:auto}.admin-table:focus-visible{outline:3px solid var(--focus)}</style>'
             + network_incidents() + '<h1>LiveChat XR admin</h1>' + network_totals() +
+            f'<div class="box">{downloads} This browser is marked internal.</div>' +
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
             f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
@@ -1210,7 +1234,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         if ctype.startswith("text/javascript"):
             self.send_header("Cache-Control", "public, max-age=86400")
-        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin", "/discord/callback")):  # callback can list manage links
+        elif self.path.startswith(("/m/", "/recover", "/network/", "/admin", "/discord/callback", "/download")):  # callback can list manage links
             self.send_header("Cache-Control", "no-store")
         if code == 429:
             self.send_header("Retry-After", str(RATE_LIMIT[1]))
@@ -1348,12 +1372,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/download":
+            try:
+                jar = http.cookies.SimpleCookie(self.headers.get("Cookie", ""))
+                value = jar.get("lcx_owner")
+                internal = bool(ADMIN_KEY and value and secrets.compare_digest(value.value, owner_cookie()))
+                download_counts(internal)
+            except (http.cookies.CookieError, OSError, ValueError, KeyError, TypeError):
+                log.exception("download count unavailable")
+            # shortcut: pinned to v0.3.0, update this URL when a newer stable installer is released.
+            return self.send(302, b"", location="https://github.com/DeliciousHouse/livechat-xr/releases/download/v0.3.0/LiveChatXR-Setup-0.3.0.exe")
         if path == "/":
             return self.send(200, home())
         if path == "/recover":
             return self.send(200, recovery_page())
         if path == "/admin" and ADMIN_KEY and secrets.compare_digest(parse_qs(self.path.partition("?")[2]).get("key", [""])[0], ADMIN_KEY):
-            return self.send(200, page(admin_body()))
+            return self.send(200, page(admin_body()), cookie=f"lcx_owner={owner_cookie()}; Path=/; Max-Age=31536000; Secure; HttpOnly; SameSite=Lax")
         if path == "/discord/callback":
             return self.discord_callback()
         if path == "/privacy":
