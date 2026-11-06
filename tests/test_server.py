@@ -156,6 +156,9 @@ class Server(unittest.TestCase):
             self.open(request)
         self.assertEqual(server.download_counts(), {"external": 1, "internal": 1})
         self.assertEqual(json.loads((server.DATA / "downloads.json").read_text()), server.download_counts())
+        (server.DATA / "downloads.json").write_text("invalid", encoding="utf-8")
+        with urllib.request.urlopen(self.base + "/admin?key=" + server.ADMIN_KEY) as response:
+            self.assertIn("Installer download counts unavailable", response.read().decode())
 
     def test_rejects_non_discord_urls_and_bad_channels(self):
         for hook in ("http://127.0.0.1:8100/api/webhooks/1/x", "https://discord.com.evil.io/api/webhooks/1557050913569378406/" + "a" * 68,

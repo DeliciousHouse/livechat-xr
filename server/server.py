@@ -1115,6 +1115,11 @@ def network_incidents() -> str:
 
 
 def admin_body() -> str:
+    try:
+        counts = download_counts()
+        downloads = f'Installer download requests: external {counts["external"]} · internal {counts["internal"]}.'
+    except (OSError, ValueError, KeyError, TypeError):
+        downloads = 'Installer download counts unavailable.'
     e = html.escape
     live = sum("connected" in status.get(t, "") for t in regs)
     paid = sum(plan(r) == "paid" for r in regs.values())
@@ -1141,7 +1146,7 @@ def admin_body() -> str:
             '.network-incidents li+li{margin-top:12px}.network-summary{color:var(--muted)}'
             '.admin-table{overflow-x:auto}.admin-table:focus-visible{outline:3px solid var(--focus)}</style>'
             + network_incidents() + '<h1>LiveChat XR admin</h1>' + network_totals() +
-            f'<div class="box">Installer download requests: external {download_counts()["external"]} · internal {download_counts()["internal"]}. This browser is marked internal.</div>' +
+            f'<div class="box">{downloads} This browser is marked internal.</div>' +
             f'<div class="box">{len(regs)} sign-ups: {sum(plan(r) == "founder" for r in regs.values())}/{FREE_SLOTS} founders, '
             f'{sum(plan(r) == "free" for r in regs.values())} free, {paid} paid, '
             f'{sum(len(live_channels(r)) < len(channels(r)) for r in regs.values())} waiting upgrade. {live} live right now. '
