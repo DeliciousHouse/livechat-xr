@@ -57,9 +57,9 @@ class Handler(server.Handler):
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'")
         super().end_headers()
 
-    def send(self, code, body, location="", ctype="text/html; charset=utf-8"):
+    def send(self, code, body, location="", ctype="text/html; charset=utf-8", cookie=""):
         if not ctype.startswith("text/html"):
-            return super().send(code, body, location, ctype)
+            return super().send(code, body, location, ctype, cookie)
         if b"<body>" in body:
             body = body.replace(b"<body>", ("<body>" + server.note(LABEL)).encode())
         for handle, hook in HOOKS.items():
@@ -68,7 +68,7 @@ class Handler(server.Handler):
                             b"Simulated test accepted. No Discord message was sent.")
         body = body.replace(b"Keep this page's link; it's also posted in your Discord channel. Leave it running: it picks up your chat\nwhenever you go live.",
                             b"Keep this fixture manage link for test/delete. No real chat is connected or posted.")
-        super().send(code, body, location, ctype)
+        super().send(code, body, location, ctype, cookie)
 
     def register(self, form, edit_token=""):
         form["webhook"] = HOOKS.get(form.get("webhook"), form.get("webhook", ""))
@@ -105,7 +105,7 @@ class NetworkHandler(Handler):
                          "script-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
         server.Handler.end_headers(self)
 
-    def send(self, code, body, location="", ctype="text/html; charset=utf-8"):
+    def send(self, code, body, location="", ctype="text/html; charset=utf-8", cookie=""):
         if location:
             code, body = 403, server.page(server.note("Fixture redirects disabled."))
         if ctype.startswith("text/html"):
