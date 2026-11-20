@@ -74,7 +74,7 @@ class Twitch(unittest.TestCase):
                  b"@msg-id=resub :tmi.twitch.tv USERNOTICE #chan\r\n",
                  b":chan!chan@c PRIVMSG #chan :my own message\r\n", b""]
         reader = mock.Mock(readline=mock.AsyncMock(side_effect=lines))
-        writer = mock.Mock(drain=mock.AsyncMock(), wait_closed=mock.AsyncMock())
+        writer = mock.Mock(drain=mock.AsyncMock(), wait_closed=mock.AsyncMock(side_effect=ConnectionResetError))
         out, sleeps = [], []
         tally = chat.Tally("twitch", "chan")
 
@@ -94,6 +94,35 @@ class Twitch(unittest.TestCase):
 
 
 class TikTok(unittest.TestCase):
+    def test_cancelled_connect_cannot_restart_an_orphan_listener(self):
+        async def run(outcome):
+            listening = asyncio.Event()
+            client = mock.Mock(on=lambda cls: lambda fn: fn, connected=False)
+
+            async def connect(**kwargs):
+                listening.set()
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    if outcome:
+                        raise outcome
+                    # TikTokLive.connect can consume cancellation and return normally.
+
+            client.connect = connect
+            statuses = []
+            with mock.patch("TikTokLive.TikTokLiveClient", return_value=client), \
+                    mock.patch("asyncio.sleep", side_effect=AssertionError("cancelled listener retried")):
+                task = asyncio.create_task(chat.tiktok("@me", lambda _: None, statuses.append))
+                await listening.wait()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertEqual(statuses, [])
+
+        for outcome in (None, RuntimeError("transport closed during cancellation")):
+            with self.subTest(outcome=outcome):
+                asyncio.run(run(outcome))
+
     def test_missing_user_retries_every_minute_with_a_lowercase_handle(self):
         # "Not found" also means "never gone LIVE": a first-time streamer must be picked up within a minute.
         # TikTok's LIVE lookup only matches lowercase handles (2026-10-14: "@lola_Rulay" was live but "not found").

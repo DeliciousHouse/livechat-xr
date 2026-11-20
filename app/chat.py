@@ -353,7 +353,10 @@ async def twitch(channel: str, emit, status, tally=None, *, identity=None, on_id
         finally:
             if w:
                 w.close()
-                await w.wait_closed()
+                try:
+                    await w.wait_closed()
+                except OSError:
+                    pass  # A broken IRC socket must not stop the other chat sources.
 
 
 # ---------------------------------------------------------------- TikTok (unofficial; TikTokLive library)
@@ -548,7 +551,12 @@ async def tiktok(user: str, emit, status, sign_api_key: str = "", follow_ask: st
 
         retry = 60
         try:
-            await client.connect(process_connect_events=False)  # returns when the stream ends
+            try:
+                await client.connect(process_connect_events=False)
+            finally:
+                # TikTokLive can consume cancellation while closing its websocket.
+                if asyncio.current_task().cancelling():
+                    raise asyncio.CancelledError
             missing = 0
             status(f"TikTok: @{user} went offline, waiting")
         except asyncio.CancelledError:
