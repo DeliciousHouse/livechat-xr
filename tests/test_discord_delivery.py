@@ -17,6 +17,32 @@ import chat
 
 
 class Delivery(unittest.IsolatedAsyncioTestCase):
+    async def test_paced_burst_preserves_all_four_batches(self):
+        lines = [f"Fan: {i}" for i in range(20)]
+        sent = []
+        now = 0
+
+        async def sleep(seconds):
+            nonlocal now
+            now += seconds
+
+        def post(_, text, **kwargs):
+            sent.append((now, text.splitlines()))
+            return True
+
+        with mock.patch.object(chat, "time", mock.Mock(monotonic=lambda: now)), \
+                mock.patch.object(chat.asyncio, "sleep", sleep), \
+                mock.patch.object(chat, "post_discord", post):
+            sender = chat.DiscordQueue("fixture", post_interval=7)
+            sender.put(lines)
+            worker = asyncio.create_task(sender.run())
+            try:
+                await asyncio.wait_for(sender.join(), 2)
+            finally:
+                worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+        self.assertEqual(sent, [(i * 7, lines[i * 5:i * 5 + 5]) for i in range(4)])
+
     async def test_pc_runner_keeps_all_four_discord_lines(self):
         sent, banners = [], []
         delivered = asyncio.Event()

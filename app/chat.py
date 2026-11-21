@@ -119,8 +119,9 @@ class DiscordQueue:
     Entries count original chat lines, not fragments or service notifications.
     Only unsent entries older than 60 seconds may be collapsed.
     """
-    def __init__(self, webhook, on_delivery=None):
+    def __init__(self, webhook, on_delivery=None, *, post_interval=0):
         self.webhook, self.on_delivery = webhook, on_delivery
+        self.post_interval = post_interval
         self.pending, self.sent = deque(), deque()
         self.ready, self.idle = asyncio.Event(), asyncio.Event()
         self.idle.set()
@@ -197,6 +198,8 @@ class DiscordQueue:
             if not self.pending:
                 self.ready.clear()
                 self.idle.set()
+            if self.post_interval:
+                await asyncio.sleep(self.post_interval)
 
 
 # ---------------------------------------------------------------- Twitch (anonymous IRC, no key needed)

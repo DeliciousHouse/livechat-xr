@@ -503,7 +503,9 @@ async def run(token: str, delay: float = 0) -> None:
             st["discord_error"] = error or -1
             st["last_error"] = time.strftime("%m-%d %H:%M") + " Discord post failed"
 
-    sender = chat.DiscordQueue(r["webhook"], on_delivery=delivery)
+    paced_channel = os.environ.get("PACED_DISCORD_CHANNEL_ID")
+    interval = 7 if paced_channel and paced_channel == r.get("channel_id") else 0
+    sender = chat.DiscordQueue(r["webhook"], on_delivery=delivery, post_interval=interval)
     worker = asyncio.create_task(sender.run())
 
     def on_lines(lines, platforms=()) -> None:

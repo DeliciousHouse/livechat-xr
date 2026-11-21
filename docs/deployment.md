@@ -42,6 +42,10 @@ chose free attestations first and paid signing later (security review M4).
 
 ## Dora pull deploy
 
+Set `PACED_DISCORD_CHANNEL_ID` in the relay environment to space batches for that
+Discord channel seven seconds apart. The first batch is eligible immediately
+after collection. The existing five-line limit and 60-second backlog policy apply.
+
 No GitHub-hosted runner can reach Dora, and no runner is installed on Dora.
 The user systemd timer reads this public repo and public exact-head check status.
 It needs no GitHub/tailnet key and cannot receive PR jobs. Only reviewed main with
